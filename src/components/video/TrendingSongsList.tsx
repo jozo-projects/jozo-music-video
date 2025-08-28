@@ -1,6 +1,5 @@
 import React from "react";
 import { TRENDING_SONGS } from "./constants";
-import vietnamFlag from "../../assets/vietnam-741.gif";
 
 interface TrendingSong {
   title: string;
@@ -23,25 +22,16 @@ const TrendingSongsList: React.FC<TrendingSongsListProps> = ({
 
   return (
     <div className="w-full h-full relative overflow-hidden">
-      {/* Background with Vietnam Flag */}
-      <div className="absolute inset-0 w-full h-full">
-        <img
-          src={vietnamFlag}
-          alt="Lá cờ Việt Nam"
-          className="w-full h-full object-cover"
-        />
-      </div>
-
-      {/* Overlay Layer with Content */}
-      <div className="relative z-10 w-full h-full bg-black/70 backdrop-blur-md rounded-lg p-3 flex flex-col">
+      {/* Content Layer */}
+      <div className="w-full h-full bg-black/50 backdrop-blur-md rounded-lg p-3 flex flex-col">
         {/* Header - Compact */}
         <div className="text-center mb-3 flex-shrink-0">
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500/30 to-yellow-500/30 rounded-full border border-white/20 backdrop-blur-sm mb-2">
-            <span className="text-red-400 text-lg">🇻🇳</span>
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500/30 to-cyan-500/30 rounded-full border border-white/20 backdrop-blur-sm mb-2">
+            <span className="text-blue-400 text-lg">🇻🇳</span>
             <h2 className="text-lg font-bold text-white">
               Nhạc chào mừng 80 năm Quốc Khánh 2/9
             </h2>
-            <span className="text-red-400 text-lg">🇻🇳</span>
+            <span className="text-blue-400 text-lg">🇻🇳</span>
           </div>
           <p className="text-white/90 text-sm">
             Những bài hát ca ngợi quê hương đất nước
@@ -58,20 +48,20 @@ const TrendingSongsList: React.FC<TrendingSongsListProps> = ({
               >
                 <div className="flex items-start gap-2">
                   {/* Song Number - Smaller */}
-                  <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center bg-gradient-to-br from-red-500/90 to-yellow-500/90 rounded-full text-xs font-bold text-white border border-white/60 shadow-md group-hover:scale-110 transition-transform duration-200">
+                  <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center bg-gradient-to-br from-blue-500/90 to-cyan-500/90 rounded-full text-xs font-bold text-white border border-white/60 shadow-md group-hover:scale-110 transition-transform duration-200">
                     {index + 1}
                   </div>
 
                   {/* Song Info - Compact */}
                   <div className="flex-grow min-w-0">
-                    <h3 className="text-xs font-bold text-white leading-tight mb-1 line-clamp-2 group-hover:text-yellow-200 transition-colors duration-200">
+                    <h3 className="text-xs font-bold text-white leading-tight mb-1 line-clamp-2 group-hover:text-cyan-200 transition-colors duration-200">
                       {song.title}
                     </h3>
                     <p className="text-white/90 text-[10px] leading-tight mb-1 font-medium">
                       {song.artist}
                     </p>
                     <div className="flex items-center gap-1 mb-1">
-                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-gradient-to-r from-red-500/70 to-yellow-500/70 text-white border border-white/40">
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-gradient-to-r from-blue-500/70 to-cyan-500/70 text-white border border-white/40">
                         {song.genre}
                       </span>
                       <span className="text-white/80 text-[9px] flex items-center bg-white/10 px-1 py-0.5 rounded-full">
@@ -110,12 +100,12 @@ const TrendingSongsList: React.FC<TrendingSongsListProps> = ({
 
         {/* Footer - Compact */}
         <div className="mt-3 text-center flex-shrink-0">
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500/50 to-yellow-500/50 rounded-full border border-white/40 backdrop-blur-lg shadow-lg">
-            <span className="text-red-400 text-lg">🇻🇳</span>
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500/50 to-cyan-500/50 rounded-full border border-white/40 backdrop-blur-lg shadow-lg">
+            <span className="text-blue-400 text-lg">🇻🇳</span>
             <span className="text-white text-sm font-bold">
               Việt Nam - Đất nước tôi yêu!
             </span>
-            <span className="text-red-400 text-lg">🇻🇳</span>
+            <span className="text-blue-400 text-lg">🇻🇳</span>
           </div>
         </div>
       </div>

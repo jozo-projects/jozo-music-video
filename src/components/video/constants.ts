@@ -3,7 +3,7 @@
 // Default fallback video ID for audio-only playback when no song is selected
 // This video will be completely hidden using CSS, only audio will be played to save bandwidth
 // Video ID: dg1_0zCosRw - optimized for small quality to minimize data usage
-export const FALLBACK_VIDEO_ID = "M65MJLLB4IM";
+export const FALLBACK_VIDEO_ID = "sLTsE3udRlE";
 
 // Alternative lightweight video options for fallback (commented out):
 // export const FALLBACK_VIDEO_ID = "dQw4w9WgXcQ"; // Rick Roll - classic lightweight option
@@ -14,21 +14,21 @@ export const FALLBACK_VIDEO_ID = "M65MJLLB4IM";
 
 // Cute messages to display when waiting for a song
 export const CUTE_MESSAGES = [
-  "Chào mừng bạn đến với Jozo! Cùng tạo không gian âm nhạc thật chill nào! 🎵",
-  "Hôm nay bạn muốn nghe thể loại nhạc nào? Jozo sẽ chiều lòng bạn! 🎧",
-  "Âm nhạc là liều thuốc tuyệt vời cho tâm hồn. Cùng Jozo thư giãn nào! ✨",
-  "Jozo đang đợi bạn chọn bài để quẩy cùng đây! 🎉",
-  "Hãy để Jozo làm người bạn đồng hành âm nhạc của bạn nhé! 💫",
-  "Tâm trạng hôm nay thế nào? Để Jozo chọn nhạc phù hợp cho bạn! 🎶",
-  "Mỗi ngày một bài hát, cuộc sống sẽ tươi đẹp hơn đấy! 🌟",
-  "Cùng Jozo khám phá những giai điệu tuyệt vời nào! 🎸",
-  "Đã đến lúc thư giãn và tận hưởng âm nhạc rồi! 🎼",
-  "Hôm nay chúng ta sẽ cùng nhau tạo nên những khoảnh khắc đáng nhớ! 💝",
-  "Jozo sẵn sàng phục vụ bạn những bản nhạc hay nhất! 🎪",
-  "Âm nhạc là ngôn ngữ của tâm hồn. Hãy cùng Jozo trò chuyện nhé! 🎹",
-  "Mỗi bài hát là một câu chuyện. Hãy chia sẻ câu chuyện của bạn! 🌈",
-  "Để Jozo làm người bạn đồng hành trong thế giới âm nhạc của bạn! 🎭",
-  "Hãy cùng Jozo tạo nên những khoảnh khắc âm nhạc tuyệt vời! 💫",
+  "Tự hào là người con đất Việt! 🇻🇳",
+  "Việt Nam ơi! Đất nước tôi yêu! ❤️",
+  "80 năm Quốc Khánh - Tự hào dân tộc Việt Nam! 🌟",
+  "Việt Nam - Đất nước anh hùng! 💪",
+  "Tự hào truyền thống văn hóa ngàn năm! 🏛️",
+  "Việt Nam - Đất nước của những điều kỳ diệu! ✨",
+  "Tự hào về bản sắc dân tộc Việt Nam! 🎭",
+  "Việt Nam - Đất nước của lòng hiếu khách! 🤝",
+  "Tự hào về tinh thần đoàn kết dân tộc! 🫂",
+  "Việt Nam - Đất nước của những anh hùng! 🦸",
+  "Tự hào về truyền thống yêu nước! ❤️",
+  "Việt Nam - Đất nước của những chiến thắng! 🏆",
+  "Tự hào về sức mạnh đại đoàn kết! 🤲",
+  "Việt Nam - Đất nước của những kỳ tích! 🌈",
+  "Tự hào là người Việt Nam! 🇻🇳",
 ];
 
 // Trending songs list - Chào mừng 80 năm Quốc Khánh 2/9
