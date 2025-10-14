@@ -1,6 +1,6 @@
 import React from "react";
 import { CUTE_MESSAGES } from "./constants";
-import vietnamFlag from "../../assets/Trung-thu-image.png";
+import vietnamFlag from "../../assets/chrismast.png";
 
 interface WelcomeScreenProps {
   currentMessageIndex: number;
