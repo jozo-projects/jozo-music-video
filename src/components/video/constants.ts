@@ -14,7 +14,7 @@ export const FALLBACK_VIDEO_ID = "F074LkX6zr4";
 
 // Cute messages to display when waiting for a song
 export const CUTE_MESSAGES = [
-  "Hãy hát cùng Jozo nào! 🎤",
+  "Hãy hát cùng Jozo nào!",
   "Cùng Jozo tạo nên giai điệu tuyệt vời! 🎵",
   "Jozo đang chờ bạn hát cùng! 🎶",
   "Hát cùng Jozo để tạo nên khoảnh khắc đẹp! ✨",
