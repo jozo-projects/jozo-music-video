@@ -1,6 +1,6 @@
 import React from "react";
 import { CUTE_MESSAGES } from "./constants";
-import vietnamFlag from "../../assets/chrismast.png";
+import vietnamFlag from "../../assets/hpny.png";
 
 interface WelcomeScreenProps {
   currentMessageIndex: number;
@@ -15,7 +15,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
       <div className="absolute inset-0 w-full h-full">
         <img
           src={vietnamFlag}
-          alt="Lá cờ Việt Nam"
+          alt="Tet Nguyen Dan"
           className="w-full h-full object-cover"
         />
       </div>
