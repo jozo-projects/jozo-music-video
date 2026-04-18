@@ -356,13 +356,6 @@ const VideoPlayer = () => {
             }
           }
 
-          // Force quality whenever video is playing
-          if (
-            playerRef.current.setPlaybackQuality &&
-            videoState.nowPlayingData
-          ) {
-            playerRef.current.setPlaybackQuality("hd1080");
-          }
           break;
         }
         case YT.PAUSED: {
@@ -612,37 +605,27 @@ const VideoPlayer = () => {
       // Kiểm tra xem có đang phát video chính hay fallback video
       const isPlayingFallback = videoState.currentVideoId === FALLBACK_VIDEO_ID;
 
-      // Force quality when player is ready - chỉ áp dụng chất lượng cao cho video thực
+      // Fallback: ép nhẹ để tiết kiệm dữ liệu. Video chính: để YouTube chọn (adaptive).
       if (debugInfo.isDevMode) {
         console.log(
-          `=== FORCING ${
-            isPlayingFallback ? "LOWEST" : "MAX"
-          } QUALITY ON YOUTUBE PLAYER ===`
+          `=== PLAYBACK QUALITY: ${
+            isPlayingFallback ? "small (fallback)" : "default (adaptive)"
+          } ===`
         );
       }
 
       try {
         if (isPlayingFallback) {
-          // Đặt chất lượng thấp nhất cho fallback video
           event.target.setPlaybackQuality("small");
-        } else {
-          // Đặt chất lượng cao nhất có thể cho video thực
-          event.target.setPlaybackQuality("hd1080");
-
-          // Thử cả việc thiết lập quality range
-          if (event.target.setPlaybackQualityRange) {
-            event.target.setPlaybackQualityRange("hd1080", "hd1080");
-          }
+        } else if (event.target.setPlaybackQuality) {
+          event.target.setPlaybackQuality("default");
         }
 
-        // Thay thế nhiều setTimeout bằng một cái duy nhất cho kiểm tra sau khi khởi động
         setTimeout(() => {
           try {
-            // QUAN TRỌNG: Kiểm tra lại chất lượng
             if (event.target.setPlaybackQuality) {
-              // Áp dụng chất lượng tương ứng
               event.target.setPlaybackQuality(
-                isPlayingFallback ? "small" : "hd1080"
+                isPlayingFallback ? "small" : "default"
               );
             }
 
@@ -770,34 +753,17 @@ const VideoPlayer = () => {
     ]
   );
 
-  // useEffect to monitor and log quality issues - optimized
+  // useEffect to log quality in dev (không ép chất lượng — để adaptive)
   useEffect(() => {
-    // Chỉ chạy trong chế độ development và khi có thay đổi chất lượng
     if (!debugInfo.isDevMode || !debugInfo.quality) return;
 
-    // Kiểm tra xem có đang phát fallback video hay không
     const isPlayingFallback = videoState.currentVideoId === FALLBACK_VIDEO_ID;
-    if (isPlayingFallback) return; // Không cố ép chất lượng cao cho fallback video
+    if (isPlayingFallback) return;
 
-    // Ghi log chất lượng hiện tại chỉ khi thay đổi thực sự
     if (debugInfo.qualityChangeCount <= 5) {
       console.log(
         `Current quality: ${debugInfo.quality} (changes: ${debugInfo.qualityChangeCount})`
       );
-    }
-
-    // Chỉ cố gắng buộc chất lượng khi thấy chất lượng thấp và chưa thực hiện quá nhiều lần
-    if (
-      debugInfo.quality &&
-      debugInfo.quality !== "hd1080" &&
-      playerRef.current?.setPlaybackQuality &&
-      debugInfo.qualityChangeCount < 5 // Giảm giới hạn từ 10 xuống 5
-    ) {
-      try {
-        playerRef.current.setPlaybackQuality("hd1080");
-      } catch {
-        // Silent fail
-      }
     }
   }, [
     debugInfo.quality,
@@ -831,68 +797,15 @@ const VideoPlayer = () => {
           }
           event.target.setPlaybackQuality("small");
         }
-        return; // Không cần xử lý tiếp nếu là fallback video
+        return;
       }
 
-      // Force quality back to HD 1080 if different (chỉ áp dụng cho video thực)
-      if (
-        event.data !== "hd1080" &&
-        videoState.nowPlayingData &&
-        event.target.setPlaybackQuality &&
-        !backupState.youtubeError &&
-        !backupState.isLoadingBackup &&
-        !backupState.backupUrl
-      ) {
-        if (debugInfo.isDevMode) {
-          console.log("QUALITY CHANGED - FORCING BACK TO 1080p!");
-        }
-
-        // Set it immediately
-        event.target.setPlaybackQuality("hd1080");
-
-        // Use a single timeout instead of multiple
-        setTimeout(() => {
-          try {
-            if (event.target && event.target.setPlaybackQuality) {
-              if (debugInfo.isDevMode) {
-                console.log("Delayed quality enforcement: HD 1080p");
-              }
-              event.target.setPlaybackQuality("hd1080");
-            }
-          } catch {
-            // Ignore errors
-          }
-        }, 1000);
-
-        // Only modify iframe src if quality keeps failing (after several attempts)
-        if (debugInfo.qualityChangeCount > 3) {
-          try {
-            const iframe = document.querySelector(
-              "#youtube-player iframe"
-            ) as HTMLIFrameElement | null;
-            if (iframe) {
-              let src = iframe.src;
-              if (!src.includes("vq=hd1080") && !src.includes("hd=1")) {
-                src += (src.includes("?") ? "&" : "?") + "vq=hd1080&hd=1";
-                iframe.src = src;
-              }
-            }
-          } catch (error) {
-            if (debugInfo.isDevMode) {
-              console.error("Error updating iframe on quality change:", error);
-            }
-          }
-        }
-      }
+      // Video chính: không ép hd1080 — để player tự điều chỉnh theo mạng (tránh buffer/reload)
     },
     [
       setDebugInfo,
       videoState.nowPlayingData,
-      backupState.youtubeError,
-      backupState.isLoadingBackup,
-      backupState.backupUrl,
       debugInfo.isDevMode,
-      debugInfo.qualityChangeCount,
       videoState.currentVideoId,
     ]
   );
@@ -1286,79 +1199,6 @@ const VideoPlayer = () => {
     };
   }, [backupState.backupUrl, backupState.backupVideoReady]);
 
-  // Thêm cơ chế đặc biệt để xử lý các videos không cho HD 1080p
-  useEffect(() => {
-    // Tránh vòng lặp vô hạn: chỉ xử lý khi có thay đổi thực sự về chất lượng
-    if (
-      !debugInfo.quality ||
-      debugInfo.quality === "hd1080" ||
-      !videoState.nowPlayingData ||
-      debugInfo.quality === "unknown" ||
-      !playerRef.current
-    ) {
-      return;
-    }
-
-    // Không thực hiện quá nhiều lần
-    if (debugInfo.qualityChangeCount > 10) {
-      console.log("Đã thử quá nhiều lần, ngừng cố gắng đổi chất lượng");
-      return;
-    }
-
-    // Nếu phát hiện chất lượng không phải HD 1080p, thử một số cách khắc phục
-    console.log(
-      `Phát hiện video chỉ có chất lượng ${debugInfo.quality}, thử khắc phục...`
-    );
-
-    // 1. Tìm iframe và sửa đổi trực tiếp
-    const iframe = document.querySelector(
-      "#youtube-player iframe"
-    ) as HTMLIFrameElement | null;
-    if (iframe) {
-      // Xây dựng lại URL với tham số ép buộc
-      const videoId = videoState.nowPlayingData.video_id;
-      const timestamp = Math.floor(playerRef.current?.getCurrentTime?.() || 0);
-
-      // Xây dựng URL mới với tất cả tham số có thể để ép chất lượng
-      const forcedHDUrl = `https://www.youtube-nocookie.com/embed/${videoId}?enablejsapi=1&origin=${window.location.origin}&autoplay=1&rel=0&modestbranding=1&vq=hd1080&hd=1&highres=1&quality=highres&iv_load_policy=3&playsinline=1&start=${timestamp}`;
-
-      console.log("Reloading iframe with special HD URL:", forcedHDUrl);
-      iframe.src = forcedHDUrl;
-    }
-  }, [debugInfo.quality, debugInfo.qualityChangeCount]);
-
-  // Thêm phương pháp mở trực tiếp video trong tab khác khi phát hiện không có 1080p
-  useEffect(() => {
-    // Tránh vòng lặp vô hạn, chỉ chạy khi thực sự cần thiết
-    if (
-      !debugInfo.isDevMode ||
-      !debugInfo.quality ||
-      !videoState.nowPlayingData?.video_id
-    )
-      return;
-
-    // Nếu phát hiện video không thể phát ở chất lượng HD 1080p sau nhiều lần thử
-    if (debugInfo.quality !== "hd1080" && debugInfo.qualityChangeCount > 3) {
-      const videoId = videoState.nowPlayingData?.video_id;
-
-      // Nếu đã thử 3 lần mà vẫn không có HD, hiển thị thông báo
-      console.warn(`
-        ==== KHÔNG THỂ PHÁT HD 1080P CHO VIDEO ${videoId} ====
-        Chất lượng hiện tại: ${debugInfo.quality}
-        Số lần thử: ${debugInfo.qualityChangeCount}
-        
-        YouTube có thể giới hạn chất lượng video nhúng trong iframe.
-        Chất lượng có sẵn: ${JSON.stringify(debugInfo.availableQualities || [])}
-      `);
-    }
-  }, [
-    debugInfo.quality,
-    debugInfo.qualityChangeCount,
-    debugInfo.isDevMode,
-    debugInfo.availableQualities,
-    videoState.nowPlayingData?.video_id,
-  ]);
-
   // Force hide loading indicator after 3 seconds
   useEffect(() => {
     if (isChangingSong && videoState.nowPlayingData) {
@@ -1395,33 +1235,26 @@ const VideoPlayer = () => {
     const combinedInterval = setInterval(() => {
       if (!playerRef.current) return;
 
-      // 1. Kiểm tra và ép chất lượng HD - giảm tần suất kiểm tra
-      if (Math.random() < 0.2) {
-        // Giảm từ 30% xuống 20% thời gian
+      // 1. Dev: chỉ đọc danh sách chất lượng (không ép hd1080)
+      if (
+        Math.random() < 0.15 &&
+        debugInfo.isDevMode &&
+        playerRef.current.getAvailableQualityLevels
+      ) {
         try {
-          playerRef.current.setPlaybackQuality?.("hd1080");
-
-          // Kiểm tra và log các chất lượng có sẵn (giới hạn tần suất cập nhật)
+          const qualities = playerRef.current.getAvailableQualityLevels();
           if (
-            playerRef.current.getAvailableQualityLevels &&
-            Math.random() < 0.2 &&
-            debugInfo.isDevMode
+            JSON.stringify(qualities) !==
+            JSON.stringify(debugInfo.availableQualities)
           ) {
-            // Giảm từ 30% xuống 20% lần kiểm tra
-            const qualities = playerRef.current.getAvailableQualityLevels();
-            if (
-              JSON.stringify(qualities) !==
-              JSON.stringify(debugInfo.availableQualities)
-            ) {
-              console.log("Available quality levels:", qualities);
-              setDebugInfo((prev) => ({
-                ...prev,
-                availableQualities: qualities,
-              }));
-            }
+            console.log("Available quality levels:", qualities);
+            setDebugInfo((prev) => ({
+              ...prev,
+              availableQualities: qualities,
+            }));
           }
         } catch {
-          // Ignore quality errors
+          // ignore
         }
       }
 

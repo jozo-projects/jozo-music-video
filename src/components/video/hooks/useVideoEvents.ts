@@ -576,7 +576,6 @@ export function useVideoEvents({
   const handleStateChange = useCallback(
     (event: { data: number; target?: any }) => {
       const socket = socketRef.current;
-      const videoState = videoStateRef.current;
       const roomId = roomIdRef.current;
 
       if (!playerRef.current || !socket) return;
@@ -603,24 +602,6 @@ export function useVideoEvents({
         switch (event.data) {
           case YT.PlayerState.PLAYING:
             console.log("Video is now playing");
-
-            // Ép chất lượng cao nhất mỗi khi video đang phát
-            if (
-              playerRef.current.setPlaybackQuality &&
-              videoState.nowPlayingData
-            ) {
-              try {
-                playerRef.current.setPlaybackQuality("hd1080");
-                console.log(
-                  "Forced playback quality to HD 1080p during playback"
-                );
-              } catch (error) {
-                console.warn(
-                  "Failed to set HD quality during playback:",
-                  error
-                );
-              }
-            }
 
             // Cập nhật trạng thái và gửi event
             setVideoState((prev) => ({

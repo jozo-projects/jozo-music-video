@@ -110,7 +110,7 @@ const YouTubePlayerIframe: React.FC<YouTubePlayerIframeProps> = ({
               playerRef.current.loadVideoById({
                 videoId: actualVideoId,
                 startSeconds: 0,
-                suggestedQuality: isFallback ? "small" : "hd1080",
+                suggestedQuality: isFallback ? "small" : "default",
               });
               try {
                 if (playerRef.current.setOption) {
@@ -131,7 +131,7 @@ const YouTubePlayerIframe: React.FC<YouTubePlayerIframeProps> = ({
             playerRef.current.loadVideoById({
               videoId: actualVideoId,
               startSeconds: 0,
-              suggestedQuality: isFallback ? "small" : "hd1080",
+              suggestedQuality: isFallback ? "small" : "default",
             });
           }
         } catch (e) {
