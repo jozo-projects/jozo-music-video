@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { FC, useEffect, useRef, useState, useMemo } from "react";
 import { YouTubePlayerRef } from "./types";
+import {
+  applyInitialPlaybackQualityIfFallback,
+  enforceFallbackQualityOnChange,
+} from "./youtubePlaybackQuality";
 
 // Biến global để theo dõi trạng thái
 let isYouTubeApiLoaded = !!(window as any).YT && !!(window as any).YT.Player;
@@ -104,18 +108,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         return;
       }
 
-      // Fallback: nhẹ để tiết kiệm dữ liệu. Video chính: default (YouTube adaptive theo mạng).
-      if (videoId && player.setPlaybackQuality) {
-        try {
-          if (isFallback) {
-            player.setPlaybackQuality("small");
-          } else {
-            player.setPlaybackQuality("default");
-          }
-        } catch (qualityError) {
-          console.warn("Failed to set playback quality:", qualityError);
-        }
-      }
+      applyInitialPlaybackQualityIfFallback(player, isFallback);
 
       // Update references only when we've verified the methods work
       // @ts-expect-error - bỏ qua lỗi TypeScript
@@ -234,8 +227,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           videoId || fallbackVideoId
         );
 
-        // Thiết lập tham số player
-        const hdPlayerVars = {
+        const playerVars = {
           autoplay: 1,
           controls: 0,
           modestbranding: 1,
@@ -267,7 +259,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         globalYouTubePlayer = new (window as any).YT.Player("youtube-player", {
           videoId: videoId || (isFallback ? fallbackVideoId : undefined),
           host: "https://www.youtube.com",
-          playerVars: hdPlayerVars,
+          playerVars,
           events: {
             onReady: handleOnReady,
             onStateChange,
@@ -276,17 +268,11 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
               target?: any;
             }) => {
               onPlaybackQualityChange(event);
-              if (
-                isFallback &&
-                event.data !== "small" &&
-                event.target?.setPlaybackQuality
-              ) {
-                try {
-                  event.target.setPlaybackQuality("small");
-                } catch (e) {
-                  console.error("Error setting fallback to low quality:", e);
-                }
-              }
+              enforceFallbackQualityOnChange(
+                isFallback,
+                event.data,
+                event.target
+              );
             },
             onError,
           },

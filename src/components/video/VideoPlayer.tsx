@@ -3,7 +3,11 @@ import { useCallback, useEffect, useRef, useState, memo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { logo } from "../../assets";
 import { RecordingStudio } from "../../RecordingStudio";
-import { CUTE_MESSAGES, FALLBACK_VIDEO_ID } from "./constants";
+import {
+  CUTE_MESSAGES,
+  FALLBACK_VIDEO_ID,
+  SONG_TRANSITION_BUFFER_MS,
+} from "./constants";
 import { useBackupVideo } from "./hooks/useBackupVideo";
 import { useSocketConnection } from "./hooks/useSocketConnection";
 import { useVideoEvents } from "./hooks/useVideoEvents";
@@ -22,6 +26,10 @@ import {
 } from "./UIOverlays";
 import WelcomeScreen from "./WelcomeScreen";
 import YouTubePlayerIframe from "./YouTubePlayerIframe";
+import {
+  applyInitialPlaybackQualityIfFallback,
+  enforceFallbackQualityOnChange,
+} from "./youtubePlaybackQuality";
 
 // Tối ưu interface bằng cách chỉ giữ các methods cần thiết
 interface YouTubePlayerEvent {
@@ -41,7 +49,6 @@ interface YouTubePlayerEvent {
     getVolume?: () => number;
     getPlayerState?: () => number;
     getAvailableQualityLevels?: () => string[];
-    setPlaybackQualityRange?: (min: string, max: string) => void;
   };
 }
 
@@ -106,6 +113,43 @@ const VideoPlayer = () => {
 
   // Thêm ref để theo dõi trạng thái video
   const currentVideoRef = useRef<string | null>(null);
+  /** Tránh request_current_song khi vừa clear queue có chủ đích (đang chờ buffer) */
+  const skipPlaylistRecoverRef = useRef(false);
+  const nowPlayingDataRef = useRef(videoState.nowPlayingData);
+  nowPlayingDataRef.current = videoState.nowPlayingData;
+  const releaseHeldVideoTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
+  const cancelHeldVideoRelease = useCallback(() => {
+    if (releaseHeldVideoTimerRef.current !== null) {
+      clearTimeout(releaseHeldVideoTimerRef.current);
+      releaseHeldVideoTimerRef.current = null;
+    }
+    skipPlaylistRecoverRef.current = false;
+  }, []);
+
+  const scheduleHeldVideoRelease = useCallback(
+    (opts?: { intentionalQueueClear?: boolean }) => {
+      if (releaseHeldVideoTimerRef.current !== null) {
+        clearTimeout(releaseHeldVideoTimerRef.current);
+        releaseHeldVideoTimerRef.current = null;
+      }
+      if (opts?.intentionalQueueClear) {
+        skipPlaylistRecoverRef.current = true;
+      }
+      releaseHeldVideoTimerRef.current = setTimeout(() => {
+        releaseHeldVideoTimerRef.current = null;
+        if (!nowPlayingDataRef.current?.video_id) {
+          currentVideoRef.current = null;
+        }
+        skipPlaylistRecoverRef.current = false;
+      }, SONG_TRANSITION_BUFFER_MS);
+    },
+    []
+  );
+
+  useEffect(() => () => cancelHeldVideoRelease(), [cancelHeldVideoRelease]);
 
   // Thêm flag để theo dõi khi event được trigger bởi server
   const isServerTriggeredRef = useRef(false);
@@ -252,10 +296,9 @@ const VideoPlayer = () => {
     backupState,
     setBackupState,
     onSongEnded: () => {
-      // Reset currentVideoRef khi bài hát thực sự kết thúc
-      currentVideoRef.current = null;
+      scheduleHeldVideoRelease();
       if (debugInfo.isDevMode) {
-        console.log("Song ended, resetting currentVideoRef");
+        console.log("Song ended, scheduling release of held video id");
       }
     },
   });
@@ -605,29 +648,12 @@ const VideoPlayer = () => {
       // Kiểm tra xem có đang phát video chính hay fallback video
       const isPlayingFallback = videoState.currentVideoId === FALLBACK_VIDEO_ID;
 
-      // Fallback: ép nhẹ để tiết kiệm dữ liệu. Video chính: để YouTube chọn (adaptive).
-      if (debugInfo.isDevMode) {
-        console.log(
-          `=== PLAYBACK QUALITY: ${
-            isPlayingFallback ? "small (fallback)" : "default (adaptive)"
-          } ===`
-        );
-      }
-
       try {
-        if (isPlayingFallback) {
-          event.target.setPlaybackQuality("small");
-        } else if (event.target.setPlaybackQuality) {
-          event.target.setPlaybackQuality("default");
-        }
+        applyInitialPlaybackQualityIfFallback(event.target, isPlayingFallback);
 
         setTimeout(() => {
           try {
-            if (event.target.setPlaybackQuality) {
-              event.target.setPlaybackQuality(
-                isPlayingFallback ? "small" : "default"
-              );
-            }
+            applyInitialPlaybackQualityIfFallback(event.target, isPlayingFallback);
 
             // Kiểm tra xem player có bị mute không
             const isMuted = event.target.isMuted?.() || false;
@@ -656,7 +682,7 @@ const VideoPlayer = () => {
         }, 1000); // Giảm từ 2 giây xuống 1 giây để sync nhanh hơn
       } catch (e) {
         if (debugInfo.isDevMode) {
-          console.error("Error setting initial quality:", e);
+          console.error("Error during initial playback quality setup:", e);
         }
       }
 
@@ -779,35 +805,20 @@ const VideoPlayer = () => {
         console.log("Quality changed:", event.data);
       }
 
-      // Update debug info with more detail
       setDebugInfo((prev) => ({
         ...prev,
         quality: event.data,
         qualityChangeCount: prev.qualityChangeCount + 1,
       }));
 
-      // Kiểm tra xem có đang phát fallback video hay không
       const isPlayingFallback = videoState.currentVideoId === FALLBACK_VIDEO_ID;
-
-      if (isPlayingFallback) {
-        // Nếu là fallback video và chất lượng chưa phải là "small", thì set lại
-        if (event.data !== "small" && event.target.setPlaybackQuality) {
-          if (debugInfo.isDevMode) {
-            console.log("FALLBACK VIDEO - FORCING LOW QUALITY!");
-          }
-          event.target.setPlaybackQuality("small");
-        }
-        return;
-      }
-
-      // Video chính: không ép hd1080 — để player tự điều chỉnh theo mạng (tránh buffer/reload)
+      enforceFallbackQualityOnChange(
+        isPlayingFallback,
+        event.data,
+        event.target
+      );
     },
-    [
-      setDebugInfo,
-      videoState.nowPlayingData,
-      debugInfo.isDevMode,
-      videoState.currentVideoId,
-    ]
+    [setDebugInfo, debugInfo.isDevMode, videoState.currentVideoId]
   );
 
   // Hàm này gọi trực tiếp API khi việc dùng hook không có kết quả - tối ưu để giảm RAM
@@ -1235,7 +1246,7 @@ const VideoPlayer = () => {
     const combinedInterval = setInterval(() => {
       if (!playerRef.current) return;
 
-      // 1. Dev: chỉ đọc danh sách chất lượng (không ép hd1080)
+      // 1. Dev: đồng bộ danh sách chất lượng có sẵn (chỉ đọc)
       if (
         Math.random() < 0.15 &&
         debugInfo.isDevMode &&
@@ -1351,7 +1362,12 @@ const VideoPlayer = () => {
   // Thêm một effect để khôi phục trạng thái video khi bị mất
   useEffect(() => {
     // Nếu video data bị mất nhưng ref vẫn còn, yêu cầu server gửi lại thông tin bài hát
-    if (!videoState.nowPlayingData && currentVideoRef.current && socket) {
+    if (
+      !videoState.nowPlayingData &&
+      currentVideoRef.current &&
+      socket &&
+      !skipPlaylistRecoverRef.current
+    ) {
       if (debugInfo.isDevMode) {
         console.log("Requesting current song info due to data loss");
       }
@@ -1389,7 +1405,7 @@ const VideoPlayer = () => {
         console.log("Received play_song event:", data);
       }
 
-      // Cập nhật currentVideoRef khi có bài hát mới
+      cancelHeldVideoRelease();
       if (data?.video_id) {
         currentVideoRef.current = data.video_id;
       }
@@ -1413,7 +1429,7 @@ const VideoPlayer = () => {
         console.log("Received current_song event:", data);
       }
 
-      // Cập nhật currentVideoRef khi có thông tin bài hát hiện tại
+      cancelHeldVideoRelease();
       if (data?.video_id) {
         currentVideoRef.current = data.video_id;
       }
@@ -1435,8 +1451,7 @@ const VideoPlayer = () => {
         console.log("Received now_playing_cleared event");
       }
 
-      // Reset currentVideoRef khi danh sách phát bị xóa
-      currentVideoRef.current = null;
+      scheduleHeldVideoRelease({ intentionalQueueClear: true });
     };
 
     socket.on("now_playing_cleared", handleNowPlayingCleared);
@@ -1444,7 +1459,7 @@ const VideoPlayer = () => {
     return () => {
       socket.off("now_playing_cleared", handleNowPlayingCleared);
     };
-  }, [socket, debugInfo.isDevMode]);
+  }, [socket, debugInfo.isDevMode, scheduleHeldVideoRelease]);
 
   // Thêm effect để tự động reset trạng thái lỗi YouTube sau một khoảng thời gian
   // nếu không thể tải backup video

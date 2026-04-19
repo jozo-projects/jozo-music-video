@@ -87,7 +87,6 @@ export interface YouTubePlayerRef {
   getPlayerState: () => number;
   getAvailableQualityLevels: () => string[];
   setPlaybackQuality: (quality: string) => void;
-  setPlaybackQualityRange?: (min: string, max: string) => void;
   loadVideoById: (options: { videoId: string; startSeconds?: number }) => void;
   destroy: () => void;
 }
