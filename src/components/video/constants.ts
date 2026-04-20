@@ -1,7 +1,7 @@
 // import { TrendingSong } from "./types";
 
 /** Sau khi queue trống / hết bài: giữ video id cũ & trì hoãn load fallback để tránh nháy 1 frame khi server gửi bài mới liền sau */
-export const SONG_TRANSITION_BUFFER_MS = 520;
+export const SONG_TRANSITION_BUFFER_MS = 900;
 
 // Default fallback video ID for audio-only playback when no song is selected
 // This video will be completely hidden using CSS, only audio will be played to save bandwidth

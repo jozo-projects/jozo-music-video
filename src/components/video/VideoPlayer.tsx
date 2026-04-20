@@ -28,6 +28,7 @@ import WelcomeScreen from "./WelcomeScreen";
 import YouTubePlayerIframe from "./YouTubePlayerIframe";
 import {
   applyInitialPlaybackQualityIfFallback,
+  applyNetworkAwareQualityCap,
   enforceFallbackQualityOnChange,
 } from "./youtubePlaybackQuality";
 
@@ -650,10 +651,12 @@ const VideoPlayer = () => {
 
       try {
         applyInitialPlaybackQualityIfFallback(event.target, isPlayingFallback);
+        applyNetworkAwareQualityCap(event.target, isPlayingFallback);
 
         setTimeout(() => {
           try {
             applyInitialPlaybackQualityIfFallback(event.target, isPlayingFallback);
+            applyNetworkAwareQualityCap(event.target, isPlayingFallback);
 
             // Kiểm tra xem player có bị mute không
             const isMuted = event.target.isMuted?.() || false;
@@ -817,6 +820,7 @@ const VideoPlayer = () => {
         event.data,
         event.target
       );
+      applyNetworkAwareQualityCap(event.target, isPlayingFallback);
     },
     [setDebugInfo, debugInfo.isDevMode, videoState.currentVideoId]
   );

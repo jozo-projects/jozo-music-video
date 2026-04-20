@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { FC, useEffect, useRef, useState, useMemo } from "react";
+import { FC, useEffect, useRef, useState } from "react";
 import { YouTubePlayerRef } from "./types";
 import {
   applyInitialPlaybackQualityIfFallback,
@@ -188,7 +188,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
             console.log("Tải video mới vào player hiện có:", videoId);
             playerRef.current.loadVideoById({
               videoId: videoId,
-              startSeconds: 0,
+              startSeconds: startSeconds ?? 0,
             });
           }
           initializingRef.current = false;
@@ -229,7 +229,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
 
         const playerVars = {
           autoplay: 1,
-          controls: 0,
+          controls: showControls ? 1 : 0,
           modestbranding: 1,
           rel: 0,
           fs: 1,
@@ -336,38 +336,6 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
     fallbackVideoId,
   ]);
 
-  // Generate the correct YouTube embed URL
-  const youtubeUrl = useMemo(() => {
-    if (!videoId) return "";
-
-    // Thay đổi cách nhúng: dùng nocookie.com và thêm nhiều tham số hơn
-    const url = `https://www.youtube-nocookie.com/embed/${videoId}?`;
-
-    const params = [
-      "enablejsapi=1",
-      "origin=" + (typeof window !== "undefined" ? window.location.origin : ""),
-      "autoplay=1",
-      "rel=0",
-      "modestbranding=1",
-      "iv_load_policy=3",
-      "playsinline=1",
-      `controls=${showControls ? 1 : 0}`,
-      "fs=1",
-      "showinfo=0",
-      "hl=vi",
-      "cc_load_policy=0",
-      "cc_lang_pref=none",
-      "color=white",
-    ];
-
-    // Add custom starting point if provided
-    if (startSeconds) {
-      params.push(`start=${startSeconds}`);
-    }
-
-    return url + params.join("&");
-  }, [videoId, startSeconds, showControls]);
-
   return (
     <div
       id="youtube-player"
@@ -377,44 +345,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         height: "100%",
         overflow: "hidden",
       }}
-    >
-      {apiLoaded ? (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            overflow: "hidden",
-          }}
-        >
-          <iframe
-            id={`youtube-player-iframe-${videoId}`}
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              width: "1920px",
-              height: "1080px",
-              transform: "translate(-50%, -50%) scale(1.01)",
-              transformOrigin: "center center",
-            }}
-            src={youtubeUrl}
-            frameBorder="0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-            allowFullScreen
-            title="YouTube video player"
-            referrerPolicy="origin"
-          ></iframe>
-        </div>
-      ) : (
-        <div
-          id="youtube-player"
-          className="absolute top-0 left-0 w-full h-full"
-        />
-      )}
-    </div>
+    />
   );
 };
 
