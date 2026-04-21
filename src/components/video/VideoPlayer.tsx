@@ -31,6 +31,7 @@ import {
   applyStartupLowQuality,
   enforceFallbackQualityOnChange,
   restoreAdaptiveQuality,
+  YOUTUBE_STARTUP_LOW_QUALITY,
   YOUTUBE_STARTUP_LOW_QUALITY_MS,
 } from "./youtubePlaybackQuality";
 
@@ -126,7 +127,11 @@ const VideoPlayer = () => {
   const restoreAdaptiveQualityTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
+  const enforceStartupQualityIntervalRef = useRef<ReturnType<
+    typeof setInterval
+  > | null>(null);
   const startupQualityVideoIdRef = useRef<string>("");
+  const startupQualityLockUntilRef = useRef<number>(0);
 
   const cancelHeldVideoRelease = useCallback(() => {
     if (releaseHeldVideoTimerRef.current !== null) {
@@ -170,10 +175,15 @@ const VideoPlayer = () => {
 
   useEffect(
     () => () => {
+      if (enforceStartupQualityIntervalRef.current !== null) {
+        clearInterval(enforceStartupQualityIntervalRef.current);
+        enforceStartupQualityIntervalRef.current = null;
+      }
       if (restoreAdaptiveQualityTimerRef.current !== null) {
         clearTimeout(restoreAdaptiveQualityTimerRef.current);
         restoreAdaptiveQualityTimerRef.current = null;
       }
+      startupQualityLockUntilRef.current = 0;
       startupQualityVideoIdRef.current = "";
     },
     []
@@ -686,11 +696,36 @@ const VideoPlayer = () => {
           startupQualityVideoIdRef.current !== currentVideoId
         ) {
           startupQualityVideoIdRef.current = currentVideoId;
+          startupQualityLockUntilRef.current = Date.now() + YOUTUBE_STARTUP_LOW_QUALITY_MS;
+
+          if (enforceStartupQualityIntervalRef.current !== null) {
+            clearInterval(enforceStartupQualityIntervalRef.current);
+            enforceStartupQualityIntervalRef.current = null;
+          }
+          enforceStartupQualityIntervalRef.current = setInterval(() => {
+            const player = playerRef.current;
+            if (!player) return;
+
+            if (Date.now() >= startupQualityLockUntilRef.current) {
+              if (enforceStartupQualityIntervalRef.current !== null) {
+                clearInterval(enforceStartupQualityIntervalRef.current);
+                enforceStartupQualityIntervalRef.current = null;
+              }
+              return;
+            }
+            player.setPlaybackQuality?.(YOUTUBE_STARTUP_LOW_QUALITY);
+          }, 500);
+
           if (restoreAdaptiveQualityTimerRef.current !== null) {
             clearTimeout(restoreAdaptiveQualityTimerRef.current);
           }
           restoreAdaptiveQualityTimerRef.current = setTimeout(() => {
+            if (enforceStartupQualityIntervalRef.current !== null) {
+              clearInterval(enforceStartupQualityIntervalRef.current);
+              enforceStartupQualityIntervalRef.current = null;
+            }
             restoreAdaptiveQuality(event.target, false);
+            startupQualityLockUntilRef.current = 0;
             restoreAdaptiveQualityTimerRef.current = null;
           }, YOUTUBE_STARTUP_LOW_QUALITY_MS);
         }
@@ -840,6 +875,12 @@ const VideoPlayer = () => {
         event.data,
         event.target
       );
+
+      const isStartupLockActive =
+        !isPlayingFallback && Date.now() < startupQualityLockUntilRef.current;
+      if (isStartupLockActive && event.data !== YOUTUBE_STARTUP_LOW_QUALITY) {
+        event.target.setPlaybackQuality(YOUTUBE_STARTUP_LOW_QUALITY);
+      }
     },
     [isDevMode, videoState.currentVideoId]
   );

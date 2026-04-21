@@ -5,7 +5,7 @@
 
 export const YOUTUBE_QUALITY_FALLBACK = "small" as const;
 export const YOUTUBE_QUALITY_NETWORK_CAP = "large" as const; // ~480p for weak connections
-export const YOUTUBE_STARTUP_LOW_QUALITY = "small" as const;
+export const YOUTUBE_STARTUP_LOW_QUALITY = "hd720" as const;
 export const YOUTUBE_ADAPTIVE_QUALITY = "default" as const;
 export const YOUTUBE_STARTUP_LOW_QUALITY_MS = 10_000;
 

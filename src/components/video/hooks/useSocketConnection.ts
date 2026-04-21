@@ -3,7 +3,7 @@ import io, { Socket } from "socket.io-client";
 import { SocketStatus, VideoTurnedOffData } from "../types";
 
 // Tạo một global socket để tránh nhiều kết nối mới
-let globalSocket: typeof Socket | null = null;
+let globalSocket: Socket | null = null;
 
 interface UseSocketConnectionProps {
   roomId: string;
@@ -13,7 +13,7 @@ interface UseSocketConnectionProps {
 }
 
 interface UseSocketConnectionResult {
-  socket: typeof Socket | null;
+  socket: Socket | null;
   socketStatus: SocketStatus;
   isVideoOff: boolean;
 }
@@ -24,13 +24,22 @@ export function useSocketConnection({
   onVideosOff,
   onVideosOn,
 }: UseSocketConnectionProps): UseSocketConnectionResult {
-  const [socket, setSocket] = useState<typeof Socket | null>(globalSocket);
+  const [socket, setSocket] = useState<Socket | null>(globalSocket);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>({
     connected: globalSocket?.connected || false,
     connectionAttempts: 0,
   });
   const connectingRef = useRef(false);
+  const onConnectRef = useRef(onConnect);
+  const onVideosOffRef = useRef(onVideosOff);
+  const onVideosOnRef = useRef(onVideosOn);
+
+  useEffect(() => {
+    onConnectRef.current = onConnect;
+    onVideosOffRef.current = onVideosOff;
+    onVideosOnRef.current = onVideosOn;
+  }, [onConnect, onVideosOff, onVideosOn]);
 
   useEffect(() => {
     // Nếu đang kết nối, bỏ qua
@@ -41,10 +50,13 @@ export function useSocketConnection({
     // Sử dụng socket toàn cục nếu đã tồn tại và kết nối
     if (globalSocket && globalSocket.connected) {
       console.log("Sử dụng kết nối socket hiện có");
-      setSocket(globalSocket);
-      setSocketStatus({
-        connected: true,
-        connectionAttempts: 0,
+      setSocket((prev) => (prev === globalSocket ? prev : globalSocket));
+      setSocketStatus((prev) => {
+        if (prev.connected && prev.connectionAttempts === 0) return prev;
+        return {
+          connected: true,
+          connectionAttempts: 0,
+        };
       });
 
       // Gửi roomId
@@ -92,13 +104,16 @@ export function useSocketConnection({
       console.log("Socket kết nối thành công");
       connectingRef.current = false;
 
-      setSocketStatus({
-        connected: true,
-        connectionAttempts: 0,
+      setSocketStatus((prev) => {
+        if (prev.connected && prev.connectionAttempts === 0) return prev;
+        return {
+          connected: true,
+          connectionAttempts: 0,
+        };
       });
 
       socketInstance.emit("request_current_song", { roomId });
-      onConnect();
+      onConnectRef.current();
     });
 
     // Xử lý lỗi kết nối
@@ -137,21 +152,21 @@ export function useSocketConnection({
       }));
 
       socketInstance.emit("request_current_song", { roomId });
-      onConnect();
+      onConnectRef.current();
     });
 
     // Xử lý videos_turned_off
     socketInstance.on("videos_turned_off", (data: VideoTurnedOffData) => {
       console.log("Videos đã bị tắt bởi backend", data);
       setIsVideoOff(true);
-      onVideosOff();
+      onVideosOffRef.current();
     });
 
     // Xử lý videos_turned_on
     socketInstance.on("videos_turned_on", () => {
       console.log("Videos đã được bật bởi backend");
       setIsVideoOff(false);
-      onVideosOn();
+      onVideosOnRef.current();
     });
 
     // Heartbeat
@@ -177,7 +192,7 @@ export function useSocketConnection({
         socketInstance.off("videos_turned_on");
       }
     };
-  }, [roomId, onConnect, onVideosOff, onVideosOn]);
+  }, [roomId]);
 
   return { socket, socketStatus, isVideoOff };
 }
