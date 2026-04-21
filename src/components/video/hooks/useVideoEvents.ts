@@ -4,6 +4,17 @@ import { Socket } from "socket.io-client";
 import { PlaySongEvent, VideoEvent, VideoState } from "../types";
 import { FALLBACK_VIDEO_ID, SONG_TRANSITION_BUFFER_MS } from "../constants";
 
+const IS_DEV = import.meta.env.DEV || import.meta.env.MODE === "development";
+const devLog = (...args: unknown[]) => {
+  if (IS_DEV) console.log(...args);
+};
+const devError = (...args: unknown[]) => {
+  if (IS_DEV) console.error(...args);
+};
+
+const TIME_UPDATE_INTERVAL_MS = 2500;
+const TIME_UPDATE_FORCE_EMIT_MS = 5000;
+
 // Định nghĩa một kiểu dữ liệu cho BackupState
 interface BackupState {
   backupUrl: string;
@@ -91,7 +102,7 @@ export function useVideoEvents({
 
     // Handle current song event after reconnect
     const handleCurrentSong = (data: PlaySongEvent) => {
-      console.log("Received current song after reconnect:", data);
+      devLog("Received current song after reconnect:", data);
 
       if (!data || !data.video_id) return;
 
@@ -132,7 +143,7 @@ export function useVideoEvents({
           try {
             playerRef.current.unMute?.();
           } catch (e) {
-            console.error("Error unmuting during current song update:", e);
+            devError("Error unmuting during current song update:", e);
           }
 
           // Calculate current time based on timestamp
@@ -161,7 +172,7 @@ export function useVideoEvents({
 
     // Handle play_song event
     const handlePlaySong = (data: PlaySongEvent) => {
-      console.log("Received play song:", data);
+      devLog("Received play song:", data);
       cancelDeferredFallbackLoad();
       setIsChangingSong(true);
 
@@ -192,9 +203,9 @@ export function useVideoEvents({
         // Thêm mới: Đảm bảo player không bị mute trước khi load video mới
         try {
           playerRef.current.unMute?.();
-          console.log("Unmuting player before loading new song");
+          devLog("Unmuting player before loading new song");
         } catch (e) {
-          console.error("Error unmuting during play song:", e);
+          devError("Error unmuting during play song:", e);
         }
 
         playerRef.current.loadVideoById({
@@ -206,35 +217,33 @@ export function useVideoEvents({
 
     // Handle playback_event
     const handlePlaybackEvent = (data: VideoEvent) => {
-      console.log("Received playback event:", data);
+      devLog("Received playback event:", data);
 
       // Handle for backup video
       if (backupState.backupUrl && backupVideoRef.current) {
         switch (data.event) {
           case "play":
-            console.log("Playing backup video at time:", data.currentTime);
-            // Immediate sync - set time first, then play
+            devLog("Playing backup video at time:", data.currentTime);
             backupVideoRef.current.currentTime = data.currentTime;
             backupVideoRef.current
               .play()
               .then(() => {
                 setVideoState((prev) => ({ ...prev, isPaused: false }));
-                console.log(
+                devLog(
                   "Backup video playing at:",
                   backupVideoRef.current?.currentTime
                 );
               })
-              .catch((e) => console.error("Error playing backup video:", e));
+              .catch((e) => devError("Error playing backup video:", e));
             break;
           case "pause":
-            console.log("Pausing backup video at time:", data.currentTime);
-            // Sync time before pausing
+            devLog("Pausing backup video at time:", data.currentTime);
             backupVideoRef.current.currentTime = data.currentTime;
             backupVideoRef.current.pause();
             setVideoState((prev) => ({ ...prev, isPaused: true }));
             break;
           case "seek":
-            console.log("Seeking backup video to:", data.currentTime);
+            devLog("Seeking backup video to:", data.currentTime);
             backupVideoRef.current.currentTime = data.currentTime;
             break;
         }
@@ -245,32 +254,28 @@ export function useVideoEvents({
       if (playerRef.current) {
         switch (data.event) {
           case "play":
-            console.log("Playing YouTube video at time:", data.currentTime);
+            devLog("Playing YouTube video at time:", data.currentTime);
 
-            // Immediate sync - seek first, then play
             playerRef.current.seekTo(data.currentTime, true);
 
-            // Đảm bảo video không bị mute trước khi phát
             try {
               playerRef.current.unMute?.();
             } catch (e) {
-              console.error("Error unmuting during play event:", e);
+              devError("Error unmuting during play event:", e);
             }
 
             playerRef.current.playVideo();
             setVideoState((prev) => ({ ...prev, isPaused: false }));
 
-            // Double-check sync after a brief delay
             setTimeout(() => {
               try {
                 if (playerRef.current) {
                   const currentTime = playerRef.current.getCurrentTime();
-                  const expectedTime = data.currentTime + 0.2; // Account for 200ms delay
+                  const expectedTime = data.currentTime + 0.2;
                   const timeDiff = Math.abs(currentTime - expectedTime);
 
                   if (timeDiff > 1) {
-                    // If more than 1 second off
-                    console.log(
+                    devLog(
                       `Correcting sync: expected ${expectedTime}, got ${currentTime}`
                     );
                     playerRef.current.seekTo(expectedTime, true);
@@ -285,15 +290,14 @@ export function useVideoEvents({
             break;
 
           case "pause":
-            console.log("Pausing YouTube video at time:", data.currentTime);
-            // Sync time before pausing
+            devLog("Pausing YouTube video at time:", data.currentTime);
             playerRef.current.seekTo(data.currentTime, true);
             playerRef.current.pauseVideo();
             setVideoState((prev) => ({ ...prev, isPaused: true }));
             break;
 
           case "seek":
-            console.log("Seeking YouTube video to:", data.currentTime);
+            devLog("Seeking YouTube video to:", data.currentTime);
             playerRef.current.seekTo(data.currentTime, true);
             break;
         }
@@ -345,12 +349,12 @@ export function useVideoEvents({
     const backupState = backupStateRef.current;
 
     if (!videoState.nowPlayingData || !socket) {
-      console.log("Cannot handle video end: missing data or socket");
+      devLog("Cannot handle video end: missing data or socket");
       return;
     }
 
     try {
-      console.log("Video ended: sending song_ended event");
+      devLog("Video ended: sending song_ended event");
 
       if (
         backupState.backupUrl &&
@@ -373,13 +377,13 @@ export function useVideoEvents({
         onSongEnded();
       }
     } catch (e) {
-      console.error("Error handling video end:", e);
+      devError("Error handling video end:", e);
     }
   }, [
     backupVideoRef,
     playerRef,
     handleBackupVideoEnd,
-    onSongEnded, // Thêm dependency
+    onSongEnded,
   ]);
 
   // Handle time updates - cải thiện logic sync và giảm overhead
@@ -389,12 +393,7 @@ export function useVideoEvents({
     const roomId = roomIdRef.current;
     const backupState = backupStateRef.current;
 
-    // Early returns để giảm overhead
-    if (!socket || !videoState.nowPlayingData) {
-      console.log("[TIME_UPDATE] Skipping: no socket or nowPlayingData");
-      return;
-    }
-    // Bỏ check isPaused để luôn emit time_update khi video đang chạy
+    if (!socket || !videoState.nowPlayingData) return;
 
     // Handle for backup video
     if (backupState.backupUrl && backupVideoRef.current) {
@@ -403,13 +402,7 @@ export function useVideoEvents({
       const duration = rawDuration ? Math.max(0, rawDuration - 1.5) : 0;
       const isPlaying = !backupVideoRef.current.paused;
 
-      console.log(
-        `[BACKUP] Current state: time=${currentTime}, duration=${duration}, playing=${isPlaying}, isPaused=${videoState.isPaused}`
-      );
-
-      // Early return nếu video đã kết thúc
       if (currentTime >= duration) {
-        // Sử dụng handleBackupVideoEnd nếu đã đến cuối video
         if (typeof handleBackupVideoEnd === "function") {
           handleBackupVideoEnd();
         } else {
@@ -418,20 +411,16 @@ export function useVideoEvents({
             videoId: videoState.currentVideoId,
           });
         }
-        return; // Không cần xử lý thêm
+        return;
       }
 
-      // Smart throttling - chỉ emit khi thực sự cần thiết
       const timeDiff = Math.abs(currentTime - lastTimeRef.current.currentTime);
       const stateChanged = isPlaying !== lastTimeRef.current.isPlaying;
+      const threshold = stateChanged ? 0.3 : 0.8;
 
-      // Giảm threshold xuống để emit thường xuyên hơn
-      const threshold = stateChanged ? 0.3 : 0.8; // Giảm từ 0.5/1.0 xuống 0.3/0.8
-
-      // Force emit mỗi 3 giây để đảm bảo sync
       const timeSinceLastEmit =
         Date.now() - (lastTimeRef.current.lastEmitTime || 0);
-      const shouldForceEmit = timeSinceLastEmit > 3000;
+      const shouldForceEmit = timeSinceLastEmit > TIME_UPDATE_FORCE_EMIT_MS;
 
       if (
         (timeDiff >= threshold || stateChanged || shouldForceEmit) &&
@@ -440,74 +429,52 @@ export function useVideoEvents({
         !isNaN(currentTime) &&
         !isNaN(duration)
       ) {
-        console.log(
-          `[BACKUP] Emitting time_update: ${currentTime}/${duration}, playing: ${isPlaying}, reason: ${
-            shouldForceEmit ? "force" : stateChanged ? "state" : "time"
-          }`
-        );
-
         socket.emit("time_update", {
           roomId,
           videoId: videoState.currentVideoId,
           currentTime,
+          seconds: currentTime,
           duration,
           isPlaying,
         });
 
-        // Cập nhật thời gian và trạng thái đã gửi
         lastTimeRef.current = {
           currentTime,
           isPlaying,
           lastEmitTime: Date.now(),
         };
-      } else {
-        console.log(
-          `[BACKUP] Skipping emit: timeDiff=${timeDiff.toFixed(
-            2
-          )}, threshold=${threshold}, stateChanged=${stateChanged}, shouldForceEmit=${shouldForceEmit}`
-        );
       }
       return;
     }
 
-    // Handle for YouTube player
-    if (!playerRef.current) {
-      console.log("[YOUTUBE] Skipping: no playerRef");
-      return;
-    }
+    if (!playerRef.current) return;
 
     try {
-      // Kiểm tra phương thức có tồn tại không - early return để tránh overhead
       if (
         !playerRef.current.getVideoData ||
         !playerRef.current.getCurrentTime ||
         !playerRef.current.getDuration
       ) {
-        console.log("[YOUTUBE] Skipping: missing player methods");
-        return; // Không log warn quá thường xuyên để tránh spam console
-      }
-
-      // Gọi các phương thức một lần và cache kết quả
-      const videoData = playerRef.current.getVideoData();
-      if (!videoData || !videoData.video_id) {
-        console.log("[YOUTUBE] Skipping: no video data");
         return;
       }
+
+      const videoData = playerRef.current.getVideoData();
+      if (!videoData || !videoData.video_id) return;
 
       const currentTime = playerRef.current.getCurrentTime();
       const duration = playerRef.current.getDuration();
 
-      console.log(
-        `[YOUTUBE] Current state: time=${currentTime}, duration=${duration}, isPaused=${videoState.isPaused}`
-      );
-
-      // Early return nếu dữ liệu không hợp lệ
-      if (!currentTime || !duration || isNaN(currentTime) || isNaN(duration)) {
-        console.log("[YOUTUBE] Skipping: invalid time/duration data");
+      if (
+        currentTime === undefined ||
+        duration === undefined ||
+        currentTime < 0 ||
+        duration <= 0 ||
+        isNaN(currentTime) ||
+        isNaN(duration)
+      ) {
         return;
       }
 
-      // Early return nếu video đã kết thúc
       if (currentTime >= duration) {
         socket.emit("song_ended", {
           roomId,
@@ -516,82 +483,49 @@ export function useVideoEvents({
         return;
       }
 
-      // Smart throttling cho YouTube player
       const timeDiff = Math.abs(currentTime - lastTimeRef.current.currentTime);
       const stateChanged =
         !videoState.isPaused !== lastTimeRef.current.isPlaying;
+      const threshold = stateChanged ? 0.3 : 0.8;
 
-      // Giảm threshold để emit thường xuyên hơn
-      const threshold = stateChanged ? 0.3 : 0.8; // Giảm từ 0.5/1.0 xuống 0.3/0.8
-
-      // Force emit mỗi 3 giây để đảm bảo sync
       const timeSinceLastEmit =
         Date.now() - (lastTimeRef.current.lastEmitTime || 0);
-      const shouldForceEmit = timeSinceLastEmit > 3000;
+      const shouldForceEmit = timeSinceLastEmit > TIME_UPDATE_FORCE_EMIT_MS;
 
       if (timeDiff >= threshold || stateChanged || shouldForceEmit) {
-        console.log(
-          `[YOUTUBE] Emitting time_update: ${currentTime}/${duration}, playing: ${!videoState.isPaused}, reason: ${
-            shouldForceEmit ? "force" : stateChanged ? "state" : "time"
-          }`
-        );
-
         socket.emit("time_update", {
           roomId,
           videoId: videoData.video_id,
           currentTime,
+          seconds: currentTime,
           duration,
           isPlaying: !videoState.isPaused,
         });
 
-        // Cập nhật thời gian và trạng thái đã gửi
         lastTimeRef.current = {
           currentTime,
           isPlaying: !videoState.isPaused,
           lastEmitTime: Date.now(),
         };
-      } else {
-        console.log(
-          `[YOUTUBE] Skipping emit: timeDiff=${timeDiff.toFixed(
-            2
-          )}, threshold=${threshold}, stateChanged=${stateChanged}, shouldForceEmit=${shouldForceEmit}`
-        );
       }
     } catch (error) {
-      // Chỉ log error trong dev mode để tránh spam console trong production
-      if (process.env.NODE_ENV === "development") {
-        console.error("Error accessing YouTube player methods:", error);
-      }
+      devError("Error accessing YouTube player methods:", error);
     }
   }, [backupVideoRef, playerRef, handleBackupVideoEnd]);
 
-  // Set up time update interval với adaptive timing để tránh lag
+  // Set up time update interval ổn định, đủ thưa để không spam postMessage vào iframe.
   useEffect(() => {
     const socket = socketRef.current;
+    if (!socket) return;
 
-    if (!socket) {
-      console.log("[TIME_UPDATE] No socket, skipping interval setup");
-      return;
-    }
-    // Bỏ check isPaused để luôn chạy interval
-
-    console.log("[TIME_UPDATE] Setting up time update interval");
-
-    // Sử dụng interval đơn giản và ổn định thay vì adaptive
     const intervalId = window.setInterval(() => {
       handleTimeUpdate();
-    }, 1000); // Cố định 1 giây để ổn định
+    }, TIME_UPDATE_INTERVAL_MS);
 
-    return () => {
-      console.log("[TIME_UPDATE] Clearing time update interval");
-      clearInterval(intervalId);
-    };
+    return () => clearInterval(intervalId);
   }, [handleTimeUpdate]);
 
-  // Thêm effect để reset adaptive timing khi có thay đổi quan trọng
   useEffect(() => {
-    // Reset lastTimeRef khi video thay đổi để bắt đầu emit ngay lập tức
-    console.log("[TIME_UPDATE] Video changed, resetting lastTimeRef");
     lastTimeRef.current = { currentTime: 0, isPlaying: false };
   }, [videoState.nowPlayingData?.video_id, backupState.backupUrl]);
 
@@ -613,20 +547,15 @@ export function useVideoEvents({
       };
 
       const YT: { PlayerState: YouTubePlayerState } = (window as any).YT;
-      console.log("YouTube State Change:", event.data);
+      devLog("YouTube State Change:", event.data);
 
       try {
-        // Video đang phát thì luôn tắt loading Jozo
         if (event.data === YT.PlayerState.PLAYING) {
-          console.log("Video is now playing - hiding loading indicator");
           setIsChangingSong(false);
         }
 
         switch (event.data) {
           case YT.PlayerState.PLAYING:
-            console.log("Video is now playing");
-
-            // Cập nhật trạng thái và gửi event
             setVideoState((prev) => ({
               ...prev,
               isBuffering: false,
@@ -638,6 +567,7 @@ export function useVideoEvents({
               event: "play",
               videoId: playerRef.current.getVideoData().video_id,
               currentTime: playerRef.current.getCurrentTime(),
+              seconds: playerRef.current.getCurrentTime(),
             });
             break;
 
@@ -646,13 +576,13 @@ export function useVideoEvents({
             break;
 
           case YT.PlayerState.PAUSED:
-            console.log("Video is now paused");
             setVideoState((prev) => ({ ...prev, isPaused: true }));
             socket.emit("video_event", {
               roomId,
               event: "pause",
               videoId: playerRef.current.getVideoData().video_id,
               currentTime: playerRef.current.getCurrentTime(),
+              seconds: playerRef.current.getCurrentTime(),
             });
             break;
 
@@ -661,7 +591,7 @@ export function useVideoEvents({
             break;
         }
       } catch (error) {
-        console.error("Error in handleStateChange:", error);
+        devError("Error in handleStateChange:", error);
       }
     },
     [setIsChangingSong, setVideoState, handleVideoEnd]

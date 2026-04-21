@@ -5,6 +5,24 @@ import {
   applyInitialPlaybackQualityIfFallback,
   enforceFallbackQualityOnChange,
 } from "./youtubePlaybackQuality";
+import {
+  LOW_POWER_VIDEO_HEIGHT,
+  LOW_POWER_VIDEO_WIDTH,
+} from "./deviceCapability";
+
+const IS_DEV = import.meta.env.DEV || import.meta.env.MODE === "development";
+const devLog = (...args: unknown[]) => {
+  if (IS_DEV) console.log(...args);
+};
+const devWarn = (...args: unknown[]) => {
+  if (IS_DEV) console.warn(...args);
+};
+const devError = (...args: unknown[]) => {
+  if (IS_DEV) console.error(...args);
+};
+
+// youtube-nocookie.com nhẹ hơn (ít tracking/ads script) → giảm CPU cho iframe.
+const YOUTUBE_EMBED_HOST = "https://www.youtube-nocookie.com";
 
 // Biến global để theo dõi trạng thái
 let isYouTubeApiLoaded = !!(window as any).YT && !!(window as any).YT.Player;
@@ -21,6 +39,12 @@ interface YouTubePlayerIframeProps {
   fallbackVideoId: string;
   startSeconds?: number;
   showControls?: boolean;
+  /**
+   * Khi true: render iframe ở kích thước pixel thấp (854×480) rồi scale bằng
+   * CSS để fill viewport. Mục đích: YouTube nhìn thấy iframe nhỏ nên serve
+   * H.264 480p (nhẹ), Android TV box có thể HW-decode được.
+   */
+  lowPowerMode?: boolean;
 }
 
 const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
@@ -34,11 +58,13 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   fallbackVideoId,
   startSeconds,
   showControls = false,
+  lowPowerMode = false,
 }) => {
   const [apiLoaded, setApiLoaded] = useState(isYouTubeApiLoaded);
   const lastVideoIdRef = useRef<string | undefined>(videoId);
   const initializingRef = useRef(false);
   const playerInitializedRef = useRef(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Wrapper function for onReady to ensure playerRef is properly set
   const handleOnReady = (event: any) => {
@@ -68,41 +94,35 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           typeof player.loadVideoById === "function" &&
           typeof player.setPlaybackQuality === "function";
 
-        console.log("YouTube player successfully initialized with methods");
+        devLog("YouTube player successfully initialized with methods");
 
-        // Vô hiệu hóa phụ đề
         try {
-          // Tắt phụ đề bằng JavaScript API
           if (player && typeof player.unloadModule === "function") {
-            player.unloadModule("captions"); // Tắt module phụ đề nếu có thể
+            player.unloadModule("captions");
           }
-
-          // Phương pháp thay thế nếu unloadModule không hoạt động
           if (player && typeof player.setOption === "function") {
             player.setOption("captions", "track", {});
             player.setOption("captions", "reload", false);
             player.setOption("captions", "track", { languageCode: "" });
           }
         } catch (e) {
-          console.error("Error disabling captions:", e);
+          devError("Error disabling captions:", e);
         }
       } catch (methodError) {
-        console.error("Error verifying YouTube player methods:", methodError);
+        devError("Error verifying YouTube player methods:", methodError);
         hasValidMethods = false;
       }
 
       if (!hasValidMethods) {
-        console.error(
+        devError(
           "YouTube player is missing required methods or has invalid context"
         );
 
-        // Try to recreate the player if methods are missing or invalid
         if (!initializingRef.current) {
           setTimeout(() => {
-            console.log("Attempting to reinitialize YouTube player...");
+            devLog("Attempting to reinitialize YouTube player...");
             initializingRef.current = false;
             playerInitializedRef.current = false;
-            // This will trigger reinit on next cycle
           }, 1000);
         }
         return;
@@ -116,10 +136,9 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
       globalYouTubePlayer = player;
       playerInitializedRef.current = true;
 
-      // Call the original onReady handler with the working player
       onReady(event);
     } catch (error) {
-      console.error("Fatal error in YouTube player onReady handler:", error);
+      devError("Fatal error in YouTube player onReady handler:", error);
     }
   };
 
@@ -142,11 +161,11 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           playerRef.current = globalYouTubePlayer;
           playerInitializedRef.current = true;
         } else {
-          console.warn("Global YouTube player exists but has missing methods");
-          globalYouTubePlayer = null; // Reset the global player reference
+          devWarn("Global YouTube player exists but has missing methods");
+          globalYouTubePlayer = null;
         }
       } catch (error) {
-        console.error("Error assigning global YouTube player:", error);
+        devError("Error assigning global YouTube player:", error);
       }
     }
 
@@ -185,7 +204,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         try {
           const currentVideoId = playerRef.current.getVideoData?.()?.video_id;
           if (videoId && currentVideoId !== videoId) {
-            console.log("Tải video mới vào player hiện có:", videoId);
+            devLog("Tải video mới vào player hiện có:", videoId);
             playerRef.current.loadVideoById({
               videoId: videoId,
               startSeconds: startSeconds ?? 0,
@@ -194,21 +213,18 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           initializingRef.current = false;
           return;
         } catch (e) {
-          console.error("Lỗi khi tải video mới:", e);
-          // Có lỗi, reset trạng thái player
+          devError("Lỗi khi tải video mới:", e);
           playerInitializedRef.current = false;
         }
       }
 
-      // Kiểm tra container
       const playerContainer = document.getElementById("youtube-player");
       if (!playerContainer) {
-        console.error("Không tìm thấy container YouTube player");
+        devError("Không tìm thấy container YouTube player");
         initializingRef.current = false;
         return;
       }
 
-      // Tạo player mới
       try {
         if (
           globalYouTubePlayer &&
@@ -217,12 +233,12 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           try {
             globalYouTubePlayer.destroy();
           } catch (error) {
-            console.warn("Error destroying previous player:", error);
+            devWarn("Error destroying previous player:", error);
           }
           globalYouTubePlayer = null;
         }
 
-        console.log(
+        devLog(
           "Khởi tạo YouTube player mới với video:",
           videoId || fallbackVideoId
         );
@@ -255,10 +271,9 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           origin: ORIGIN,
         };
 
-        // Khởi tạo player với tham số đã thiết lập
         globalYouTubePlayer = new (window as any).YT.Player("youtube-player", {
           videoId: videoId || (isFallback ? fallbackVideoId : undefined),
-          host: "https://www.youtube.com",
+          host: YOUTUBE_EMBED_HOST,
           playerVars,
           events: {
             onReady: handleOnReady,
@@ -280,26 +295,24 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
 
         initializingRef.current = false;
       } catch (error) {
-        console.error("Lỗi khởi tạo YouTube player:", error);
+        devError("Lỗi khởi tạo YouTube player:", error);
         initializingRef.current = false;
         playerInitializedRef.current = false;
       }
     };
 
-    // Tải API YouTube nếu chưa có
     if (!apiLoaded && !(window as any).YT) {
-      // Thêm script tag nếu chưa có
       if (
         !document.querySelector(
           'script[src="https://www.youtube.com/iframe_api"]'
         )
       ) {
-        console.log("Đang tải YouTube API script");
+        devLog("Đang tải YouTube API script");
         const tag = document.createElement("script");
         tag.src = "https://www.youtube.com/iframe_api";
 
         tag.onload = () => {
-          console.log("Tải YouTube API thành công");
+          devLog("Tải YouTube API thành công");
           isYouTubeApiLoaded = true;
           setApiLoaded(true);
         };
@@ -307,16 +320,14 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         const firstScriptTag = document.getElementsByTagName("script")[0];
         firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
 
-        // Đăng ký callback
         (window as any).onYouTubeIframeAPIReady = () => {
-          console.log("YouTube iframe API đã sẵn sàng");
+          devLog("YouTube iframe API đã sẵn sàng");
           isYouTubeApiLoaded = true;
           setApiLoaded(true);
           initializePlayer();
         };
       }
     } else if (apiLoaded || ((window as any).YT && (window as any).YT.Player)) {
-      // API đã tải, khởi tạo player ngay
       initializePlayer();
     }
 
@@ -335,6 +346,62 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
     isFallback,
     fallbackVideoId,
   ]);
+
+  // Khi lowPowerMode: iframe render ở 854×480px rồi transform scale lên full
+  // viewport. Lý do: YouTube chọn codec dựa trên kích thước pixel thực của
+  // iframe — 480p → serve H.264 (Android box decode được bằng HW).
+  useEffect(() => {
+    if (!lowPowerMode) return;
+
+    const updateScale = () => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const parent = wrapper.parentElement;
+      if (!parent) return;
+      const availableW = parent.clientWidth;
+      const availableH = parent.clientHeight;
+      if (availableW <= 0 || availableH <= 0) return;
+      const scaleX = availableW / LOW_POWER_VIDEO_WIDTH;
+      const scaleY = availableH / LOW_POWER_VIDEO_HEIGHT;
+      const scale = Math.max(scaleX, scaleY);
+      wrapper.style.setProperty("--yt-scale", String(scale));
+    };
+
+    updateScale();
+    window.addEventListener("resize", updateScale);
+    window.addEventListener("orientationchange", updateScale);
+    return () => {
+      window.removeEventListener("resize", updateScale);
+      window.removeEventListener("orientationchange", updateScale);
+    };
+  }, [lowPowerMode]);
+
+  if (lowPowerMode) {
+    return (
+      <div
+        ref={wrapperRef}
+        style={{
+          position: "absolute",
+          inset: 0,
+          overflow: "hidden",
+          background: "#000",
+        }}
+      >
+        <div
+          id="youtube-player"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            width: `${LOW_POWER_VIDEO_WIDTH}px`,
+            height: `${LOW_POWER_VIDEO_HEIGHT}px`,
+            transform: "translate(-50%, -50%) scale(var(--yt-scale, 1))",
+            transformOrigin: "center center",
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
