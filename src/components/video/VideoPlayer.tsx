@@ -1727,7 +1727,6 @@ const VideoPlayer = () => {
           }
           fallbackVideoId={FALLBACK_VIDEO_ID}
           showControls={isDevMode && showDebugControls}
-          lowPowerMode={IS_LOW_POWER}
         />
       </div>
 

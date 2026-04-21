@@ -5,10 +5,6 @@ import {
   applyInitialPlaybackQualityIfFallback,
   enforceFallbackQualityOnChange,
 } from "./youtubePlaybackQuality";
-import {
-  LOW_POWER_VIDEO_HEIGHT,
-  LOW_POWER_VIDEO_WIDTH,
-} from "./deviceCapability";
 
 const IS_DEV = import.meta.env.DEV || import.meta.env.MODE === "development";
 const devLog = (...args: unknown[]) => {
@@ -21,8 +17,10 @@ const devError = (...args: unknown[]) => {
   if (IS_DEV) console.error(...args);
 };
 
-// youtube-nocookie.com nhẹ hơn (ít tracking/ads script) → giảm CPU cho iframe.
-const YOUTUBE_EMBED_HOST = "https://www.youtube-nocookie.com";
+// Dùng domain chính youtube.com. Trước đây thử youtube-nocookie.com nhưng
+// một số video bị hạn chế embed qua nocookie + WebView Android cũ trên
+// đầu box có thể stuck load → quay lại youtube.com cho tương thích.
+const YOUTUBE_EMBED_HOST = "https://www.youtube.com";
 
 // Biến global để theo dõi trạng thái
 let isYouTubeApiLoaded = !!(window as any).YT && !!(window as any).YT.Player;
@@ -39,12 +37,6 @@ interface YouTubePlayerIframeProps {
   fallbackVideoId: string;
   startSeconds?: number;
   showControls?: boolean;
-  /**
-   * Khi true: render iframe ở kích thước pixel thấp (854×480) rồi scale bằng
-   * CSS để fill viewport. Mục đích: YouTube nhìn thấy iframe nhỏ nên serve
-   * H.264 480p (nhẹ), Android TV box có thể HW-decode được.
-   */
-  lowPowerMode?: boolean;
 }
 
 const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
@@ -58,13 +50,11 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   fallbackVideoId,
   startSeconds,
   showControls = false,
-  lowPowerMode = false,
 }) => {
   const [apiLoaded, setApiLoaded] = useState(isYouTubeApiLoaded);
   const lastVideoIdRef = useRef<string | undefined>(videoId);
   const initializingRef = useRef(false);
   const playerInitializedRef = useRef(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Wrapper function for onReady to ensure playerRef is properly set
   const handleOnReady = (event: any) => {
@@ -346,62 +336,6 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
     isFallback,
     fallbackVideoId,
   ]);
-
-  // Khi lowPowerMode: iframe render ở 854×480px rồi transform scale lên full
-  // viewport. Lý do: YouTube chọn codec dựa trên kích thước pixel thực của
-  // iframe — 480p → serve H.264 (Android box decode được bằng HW).
-  useEffect(() => {
-    if (!lowPowerMode) return;
-
-    const updateScale = () => {
-      const wrapper = wrapperRef.current;
-      if (!wrapper) return;
-      const parent = wrapper.parentElement;
-      if (!parent) return;
-      const availableW = parent.clientWidth;
-      const availableH = parent.clientHeight;
-      if (availableW <= 0 || availableH <= 0) return;
-      const scaleX = availableW / LOW_POWER_VIDEO_WIDTH;
-      const scaleY = availableH / LOW_POWER_VIDEO_HEIGHT;
-      const scale = Math.max(scaleX, scaleY);
-      wrapper.style.setProperty("--yt-scale", String(scale));
-    };
-
-    updateScale();
-    window.addEventListener("resize", updateScale);
-    window.addEventListener("orientationchange", updateScale);
-    return () => {
-      window.removeEventListener("resize", updateScale);
-      window.removeEventListener("orientationchange", updateScale);
-    };
-  }, [lowPowerMode]);
-
-  if (lowPowerMode) {
-    return (
-      <div
-        ref={wrapperRef}
-        style={{
-          position: "absolute",
-          inset: 0,
-          overflow: "hidden",
-          background: "#000",
-        }}
-      >
-        <div
-          id="youtube-player"
-          style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            width: `${LOW_POWER_VIDEO_WIDTH}px`,
-            height: `${LOW_POWER_VIDEO_HEIGHT}px`,
-            transform: "translate(-50%, -50%) scale(var(--yt-scale, 1))",
-            transformOrigin: "center center",
-          }}
-        />
-      </div>
-    );
-  }
 
   return (
     <div

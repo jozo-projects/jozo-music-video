@@ -1,10 +1,9 @@
 /**
  * Detect thiết bị low-power (Android TV box, karaoke box chip ARM yếu).
  *
- * Mục đích:
- *  - Tắt backdrop-blur, animation nặng → giảm GPU load
- *  - Ép YouTube iframe render ở kích thước thấp (854×480) → YouTube serve
- *    H.264 thay vì VP9, vì Android box thường chỉ có HW decoder H.264.
+ * Mục đích hiện tại (chỉ CSS-only, an toàn):
+ *  - Tắt backdrop-blur real-time → giảm GPU load
+ *  - Rút ngắn / tắt animation nặng
  *
  * Lưu ý: detect là best-effort, không chính xác tuyệt đối — ưu tiên
  * false-positive (coi máy yếu khi không chắc) để giữ ổn định cho tv-box.
@@ -17,10 +16,6 @@ type NavigatorWithCapability = Navigator & {
     saveData?: boolean;
   };
 };
-
-/** Kích thước "an toàn" để YouTube serve H.264 thay vì VP9. */
-export const LOW_POWER_VIDEO_WIDTH = 854;
-export const LOW_POWER_VIDEO_HEIGHT = 480;
 
 function hasAndroidUserAgent(ua: string): boolean {
   return /android/i.test(ua);
