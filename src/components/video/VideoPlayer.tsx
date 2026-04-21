@@ -28,8 +28,10 @@ import WelcomeScreen from "./WelcomeScreen";
 import YouTubePlayerIframe from "./YouTubePlayerIframe";
 import {
   applyInitialPlaybackQualityIfFallback,
-  applyNetworkAwareQualityCap,
+  applyStartupLowQuality,
   enforceFallbackQualityOnChange,
+  restoreAdaptiveQuality,
+  YOUTUBE_STARTUP_LOW_QUALITY_MS,
 } from "./youtubePlaybackQuality";
 
 // Tối ưu interface bằng cách chỉ giữ các methods cần thiết
@@ -74,15 +76,15 @@ const VideoPlayer = () => {
     isBuffering: false,
   });
 
-  // Debug info state
-  const [debugInfo, setDebugInfo] = useState({
+  const isDevMode = import.meta.env.DEV || import.meta.env.MODE === "development";
+  const [showDebugControls, setShowDebugControls] = useState(false);
+  const debugRuntimeRef = useRef({
     quality: "",
     playerState: -1,
-    isDevMode: import.meta.env.DEV || import.meta.env.MODE === "development",
     availableQualities: [] as string[],
     qualityChangeCount: 0,
-    showControls: false,
   });
+  const [debugPanelTick, setDebugPanelTick] = useState(0);
 
   // UI states
   const [isChangingSong, setIsChangingSong] = useState(false);
@@ -121,6 +123,10 @@ const VideoPlayer = () => {
   const releaseHeldVideoTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
+  const restoreAdaptiveQualityTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const startupQualityVideoIdRef = useRef<string>("");
 
   const cancelHeldVideoRelease = useCallback(() => {
     if (releaseHeldVideoTimerRef.current !== null) {
@@ -152,6 +158,27 @@ const VideoPlayer = () => {
 
   useEffect(() => () => cancelHeldVideoRelease(), [cancelHeldVideoRelease]);
 
+  useEffect(() => {
+    if (!isDevMode || !showDebugControls) return;
+
+    const intervalId = setInterval(() => {
+      setDebugPanelTick((prev) => prev + 1);
+    }, 1500);
+
+    return () => clearInterval(intervalId);
+  }, [isDevMode, showDebugControls]);
+
+  useEffect(
+    () => () => {
+      if (restoreAdaptiveQualityTimerRef.current !== null) {
+        clearTimeout(restoreAdaptiveQualityTimerRef.current);
+        restoreAdaptiveQualityTimerRef.current = null;
+      }
+      startupQualityVideoIdRef.current = "";
+    },
+    []
+  );
+
   // Thêm flag để theo dõi khi event được trigger bởi server
   const isServerTriggeredRef = useRef(false);
 
@@ -159,17 +186,17 @@ const VideoPlayer = () => {
   useEffect(() => {
     if (videoState.nowPlayingData?.video_id) {
       currentVideoRef.current = videoState.nowPlayingData.video_id;
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Video data updated:", videoState.nowPlayingData.video_id);
       }
     }
-  }, [videoState.nowPlayingData, debugInfo.isDevMode]);
+  }, [videoState.nowPlayingData, isDevMode]);
 
   // Thêm effect để log khi videoState thay đổi đáng kể
   useEffect(() => {
     const currentVideo = currentVideoRef.current;
 
-    if (debugInfo.isDevMode) {
+    if (isDevMode) {
       if (!videoState.nowPlayingData && currentVideo) {
         console.log(
           "ANOMALY DETECTED: Video data was lost but currentVideoRef still exists:",
@@ -186,7 +213,7 @@ const VideoPlayer = () => {
         console.log("Video state nowPlayingData is null");
       }
     }
-  }, [videoState.nowPlayingData, debugInfo.isDevMode]);
+  }, [videoState.nowPlayingData, isDevMode]);
 
   // Get current videoId safely from multiple sources
   const getCurrentVideoId = useCallback(() => {
@@ -298,7 +325,7 @@ const VideoPlayer = () => {
     setBackupState,
     onSongEnded: () => {
       scheduleHeldVideoRelease();
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Song ended, scheduling release of held video id");
       }
     },
@@ -315,7 +342,7 @@ const VideoPlayer = () => {
       const YT = (window as any).YT.PlayerState;
 
       // Chỉ log trong dev mode
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log(
           "YouTube State Change:",
           event.data,
@@ -324,17 +351,15 @@ const VideoPlayer = () => {
         );
       }
 
-      // Update debug state chỉ trong dev mode
-      if (debugInfo.isDevMode) {
-        setDebugInfo((prev) => ({ ...prev, playerState: event.data }));
-      }
+      // Avoid re-render on frequent state changes in dev panel
+      debugRuntimeRef.current.playerState = event.data;
 
       // Thêm debouncing để tránh spam events
       const now = Date.now();
 
       // Skip if same event happened too recently (within 100ms)
       if (now - lastEventTimeRef.current < 100) {
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.log("Skipping duplicate state change event");
         }
         return;
@@ -350,7 +375,7 @@ const VideoPlayer = () => {
           }
           break;
         case YT.PLAYING: {
-          if (debugInfo.isDevMode) {
+          if (isDevMode) {
             console.log("Video is now playing");
           }
           // Ẩn loading indicator ngay khi video bắt đầu phát
@@ -365,14 +390,14 @@ const VideoPlayer = () => {
           try {
             const isMuted = playerRef.current.isMuted?.() || false;
             if (isMuted) {
-              if (debugInfo.isDevMode) {
+              if (isDevMode) {
                 console.log("Player muted while playing, force unmuting");
               }
               playerRef.current.unMute?.();
               playerRef.current.setVolume?.(volume);
             }
           } catch (e) {
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.error("Error checking mute state during play:", e);
             }
           }
@@ -382,7 +407,7 @@ const VideoPlayer = () => {
             const currentTime = playerRef.current.getCurrentTime();
             const videoId = playerRef.current.getVideoData().video_id;
 
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.log(
                 `Emitting play event: videoId=${videoId}, time=${currentTime}`
               );
@@ -395,7 +420,7 @@ const VideoPlayer = () => {
               currentTime,
             });
           } else {
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.log("Skipping play event emit - server triggered");
             }
           }
@@ -403,7 +428,7 @@ const VideoPlayer = () => {
           break;
         }
         case YT.PAUSED: {
-          if (debugInfo.isDevMode) {
+          if (isDevMode) {
             console.log("Video is now paused");
           }
           setVideoState((prev) => ({ ...prev, isPaused: true }));
@@ -413,7 +438,7 @@ const VideoPlayer = () => {
             const pauseCurrentTime = playerRef.current.getCurrentTime();
             const pauseVideoId = playerRef.current.getVideoData().video_id;
 
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.log(
                 `Emitting pause event: videoId=${pauseVideoId}, time=${pauseCurrentTime}`
               );
@@ -426,7 +451,7 @@ const VideoPlayer = () => {
               currentTime: pauseCurrentTime,
             });
           } else {
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.log("Skipping pause event emit - server triggered");
             }
           }
@@ -449,7 +474,7 @@ const VideoPlayer = () => {
       roomId,
       handleVideoEnd,
       volume,
-      debugInfo.isDevMode,
+      isDevMode,
       videoState.nowPlayingData,
       isChangingSong,
     ]
@@ -504,14 +529,14 @@ const VideoPlayer = () => {
 
     // Một timeout duy nhất để ẩn loading indicator
     const timeout = setTimeout(() => {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Timeout - force hiding loading indicator after 5 seconds");
       }
       setIsChangingSong(false);
     }, 5000);
 
     return () => clearTimeout(timeout);
-  }, [isChangingSong, debugInfo.isDevMode]);
+  }, [isChangingSong, isDevMode]);
 
   // Kết hợp 2 effect liên quan đến loading indicator thành 1
   useEffect(() => {
@@ -521,7 +546,7 @@ const VideoPlayer = () => {
       videoState.nowPlayingData &&
       videoState.nowPlayingData.video_id !== FALLBACK_VIDEO_ID
     ) {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Video no longer buffering - hiding loading indicator");
       }
       setIsChangingSong(false);
@@ -530,7 +555,7 @@ const VideoPlayer = () => {
     videoState.isBuffering,
     isChangingSong,
     videoState.nowPlayingData,
-    debugInfo.isDevMode,
+    isDevMode,
   ]);
 
   // Handle volume changes from server - tối ưu hóa
@@ -618,13 +643,13 @@ const VideoPlayer = () => {
         }
       } catch (e) {
         // Tránh ghi log nếu không cần thiết
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.error("Fullscreen error:", e);
         }
       }
     }
     setLastTap(now);
-  }, [lastTap, containerRef, debugInfo.isDevMode]);
+  }, [lastTap, containerRef, isDevMode]);
 
   // Thêm một effect đặc biệt để theo dõi currentVideoId
   useEffect(() => {
@@ -634,14 +659,14 @@ const VideoPlayer = () => {
       videoState.currentVideoId !== FALLBACK_VIDEO_ID
     ) {
       currentVideoRef.current = videoState.currentVideoId;
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log(
           "Updated currentVideoRef from currentVideoId:",
           videoState.currentVideoId
         );
       }
     }
-  }, [videoState.currentVideoId, debugInfo.isDevMode]);
+  }, [videoState.currentVideoId, isDevMode]);
 
   // Điều chỉnh cách xử lý YouTubePlayerReady để sử dụng currentVideoRef khi cần
   const handleYouTubePlayerReady = useCallback(
@@ -651,17 +676,34 @@ const VideoPlayer = () => {
 
       try {
         applyInitialPlaybackQualityIfFallback(event.target, isPlayingFallback);
-        applyNetworkAwareQualityCap(event.target, isPlayingFallback);
+        applyStartupLowQuality(event.target, isPlayingFallback);
+
+        const currentVideoId =
+          videoState.nowPlayingData?.video_id || currentVideoRef.current || "";
+        if (
+          !isPlayingFallback &&
+          currentVideoId &&
+          startupQualityVideoIdRef.current !== currentVideoId
+        ) {
+          startupQualityVideoIdRef.current = currentVideoId;
+          if (restoreAdaptiveQualityTimerRef.current !== null) {
+            clearTimeout(restoreAdaptiveQualityTimerRef.current);
+          }
+          restoreAdaptiveQualityTimerRef.current = setTimeout(() => {
+            restoreAdaptiveQuality(event.target, false);
+            restoreAdaptiveQualityTimerRef.current = null;
+          }, YOUTUBE_STARTUP_LOW_QUALITY_MS);
+        }
 
         setTimeout(() => {
           try {
             applyInitialPlaybackQualityIfFallback(event.target, isPlayingFallback);
-            applyNetworkAwareQualityCap(event.target, isPlayingFallback);
+            applyStartupLowQuality(event.target, isPlayingFallback);
 
             // Kiểm tra xem player có bị mute không
             const isMuted = event.target.isMuted?.() || false;
             if (isMuted) {
-              if (debugInfo.isDevMode) {
+              if (isDevMode) {
                 console.log("Player still muted after setup, force unmuting");
               }
               event.target.unMute?.();
@@ -670,7 +712,7 @@ const VideoPlayer = () => {
             // Kiểm tra lại volume
             const currentVolume = event.target.getVolume?.() || 0;
             if (currentVolume !== volume) {
-              if (debugInfo.isDevMode) {
+              if (isDevMode) {
                 console.log(
                   `Volume incorrect: ${currentVolume}, setting to ${volume}`
                 );
@@ -678,13 +720,13 @@ const VideoPlayer = () => {
               event.target.setVolume(volume);
             }
           } catch (e) {
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.error("Error during post-setup validation:", e);
             }
           }
         }, 1000); // Giảm từ 2 giây xuống 1 giây để sync nhanh hơn
       } catch (e) {
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.error("Error during initial playback quality setup:", e);
         }
       }
@@ -693,17 +735,17 @@ const VideoPlayer = () => {
       try {
         // QUAN TRỌNG: Đảm bảo player không bị mute
         event.target.unMute?.();
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.log("Explicitly unmuting player during ready event");
         }
 
         // Thiết lập volume
         event.target.setVolume(volume);
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.log("Setting volume during ready event:", volume);
         }
       } catch (e) {
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.error("Error unmuting player:", e);
         }
       }
@@ -721,7 +763,7 @@ const VideoPlayer = () => {
             serverCurrentTime + elapsedSinceServer
           );
 
-          if (debugInfo.isDevMode) {
+          if (isDevMode) {
             console.log(
               `Syncing to time: ${targetTime} (server: ${serverCurrentTime}, elapsed: ${elapsedSinceServer})`
             );
@@ -735,7 +777,7 @@ const VideoPlayer = () => {
         // Luôn ẩn loading indicator khi player đã sẵn sàng
         setIsChangingSong(false);
       } catch (e) {
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.error("Error playing video:", e);
         }
 
@@ -756,7 +798,7 @@ const VideoPlayer = () => {
             event.target.seekTo(targetTime, true);
           }
         } catch (combinedError) {
-          if (debugInfo.isDevMode) {
+          if (isDevMode) {
             console.error("Error during fallback operations:", combinedError);
           }
         }
@@ -776,43 +818,21 @@ const VideoPlayer = () => {
       socket,
       roomId,
       videoState.nowPlayingData,
-      debugInfo.isDevMode,
+      isDevMode,
       currentVideoRef,
       videoState.currentVideoId,
     ]
   );
 
-  // useEffect to log quality in dev (không ép chất lượng — để adaptive)
-  useEffect(() => {
-    if (!debugInfo.isDevMode || !debugInfo.quality) return;
-
-    const isPlayingFallback = videoState.currentVideoId === FALLBACK_VIDEO_ID;
-    if (isPlayingFallback) return;
-
-    if (debugInfo.qualityChangeCount <= 5) {
-      console.log(
-        `Current quality: ${debugInfo.quality} (changes: ${debugInfo.qualityChangeCount})`
-      );
-    }
-  }, [
-    debugInfo.quality,
-    debugInfo.qualityChangeCount,
-    debugInfo.isDevMode,
-    videoState.currentVideoId,
-  ]);
-
   // Handle YouTube playback quality change
   const handlePlaybackQualityChange = useCallback(
     (event: YouTubeQualityEvent) => {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Quality changed:", event.data);
       }
 
-      setDebugInfo((prev) => ({
-        ...prev,
-        quality: event.data,
-        qualityChangeCount: prev.qualityChangeCount + 1,
-      }));
+      debugRuntimeRef.current.quality = event.data;
+      debugRuntimeRef.current.qualityChangeCount += 1;
 
       const isPlayingFallback = videoState.currentVideoId === FALLBACK_VIDEO_ID;
       enforceFallbackQualityOnChange(
@@ -820,36 +840,35 @@ const VideoPlayer = () => {
         event.data,
         event.target
       );
-      applyNetworkAwareQualityCap(event.target, isPlayingFallback);
     },
-    [setDebugInfo, debugInfo.isDevMode, videoState.currentVideoId]
+    [isDevMode, videoState.currentVideoId]
   );
 
   // Hàm này gọi trực tiếp API khi việc dùng hook không có kết quả - tối ưu để giảm RAM
   const directlyGetBackupUrl = useCallback(
     async (videoId: string, roomId: string) => {
       if (!videoId || !roomId) {
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.error("Missing videoId or roomId for direct API call");
         }
         return;
       }
 
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("===> EMERGENCY: Directly calling backup API <===");
       }
 
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL;
         if (!baseUrl) {
-          if (debugInfo.isDevMode) {
+          if (isDevMode) {
             console.error("VITE_API_BASE_URL is not defined");
           }
           return;
         }
 
         const backupApiUrl = `${baseUrl}/room-music/${roomId}/${videoId}`;
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.log("Direct API call to:", backupApiUrl);
         }
 
@@ -859,7 +878,7 @@ const VideoPlayer = () => {
         // Tạo controller để abort nếu quá thời gian
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
-          if (debugInfo.isDevMode) {
+          if (isDevMode) {
             console.log("Direct API call timed out, aborting");
           }
           controller.abort();
@@ -873,7 +892,7 @@ const VideoPlayer = () => {
         while (attempt < maxAttempts) {
           attempt++;
           try {
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.log(`Direct API call attempt ${attempt}/${maxAttempts}`);
             }
 
@@ -899,7 +918,7 @@ const VideoPlayer = () => {
             const data = await response.json();
 
             if (data?.result?.url) {
-              if (debugInfo.isDevMode) {
+              if (isDevMode) {
                 console.log("Got direct backup URL:", data.result.url);
               }
 
@@ -917,7 +936,7 @@ const VideoPlayer = () => {
             }
           } catch (err: any) {
             lastError = err;
-            if (debugInfo.isDevMode) {
+            if (isDevMode) {
               console.error(
                 `Error in direct API call attempt ${attempt}:`,
                 err
@@ -938,13 +957,13 @@ const VideoPlayer = () => {
         clearTimeout(timeoutId);
         throw lastError || new Error("All API attempts failed");
       } catch (err) {
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.error("Error in direct API call:", err);
         }
         return null;
       }
     },
-    [setBackupState, debugInfo.isDevMode]
+    [setBackupState, isDevMode]
   );
 
   // Use direct call to fetchBackupVideo when needed
@@ -1239,7 +1258,7 @@ const VideoPlayer = () => {
       return;
 
     // Chỉ log trong development mode
-    if (debugInfo.isDevMode) {
+    if (isDevMode) {
       console.log(
         "Setting up combined interval checks for video:",
         videoState.nowPlayingData.video_id
@@ -1251,54 +1270,42 @@ const VideoPlayer = () => {
       if (!playerRef.current) return;
 
       // 1. Dev: đồng bộ danh sách chất lượng có sẵn (chỉ đọc)
-      if (
-        Math.random() < 0.15 &&
-        debugInfo.isDevMode &&
-        playerRef.current.getAvailableQualityLevels
-      ) {
+      if (isDevMode && showDebugControls && playerRef.current.getAvailableQualityLevels) {
         try {
           const qualities = playerRef.current.getAvailableQualityLevels();
           if (
             JSON.stringify(qualities) !==
-            JSON.stringify(debugInfo.availableQualities)
+            JSON.stringify(debugRuntimeRef.current.availableQualities)
           ) {
             console.log("Available quality levels:", qualities);
-            setDebugInfo((prev) => ({
-              ...prev,
-              availableQualities: qualities,
-            }));
+            debugRuntimeRef.current.availableQualities = qualities;
           }
         } catch {
           // ignore
         }
       }
 
-      // 2. Kiểm tra âm thanh và sửa nếu cần - giảm tần suất kiểm tra
-      if (Math.random() < 0.3) {
-        // Giảm từ 50% xuống 30% thời gian
-        try {
-          // Kiểm tra mute
-          const isMuted = playerRef.current.isMuted?.() || false;
-          if (isMuted) {
-            if (debugInfo.isDevMode) {
-              console.log("Combined check: Player is muted, unmuting");
-            }
-            playerRef.current.unMute?.();
+      // 2. Kiểm tra âm thanh và sửa nếu cần
+      try {
+        const isMuted = playerRef.current.isMuted?.() || false;
+        if (isMuted) {
+          if (isDevMode) {
+            console.log("Combined check: Player is muted, unmuting");
           }
-
-          // Kiểm tra volume
-          const currentVolume = playerRef.current.getVolume?.() || 0;
-          if (Math.abs(currentVolume - volume) > 5) {
-            if (debugInfo.isDevMode) {
-              console.log(
-                `Combined check: Volume incorrect ${currentVolume}, setting to ${volume}`
-              );
-            }
-            playerRef.current.setVolume?.(volume);
-          }
-        } catch {
-          // Ignore audio errors
+          playerRef.current.unMute?.();
         }
+
+        const currentVolume = playerRef.current.getVolume?.() || 0;
+        if (Math.abs(currentVolume - volume) > 5) {
+          if (isDevMode) {
+            console.log(
+              `Combined check: Volume incorrect ${currentVolume}, setting to ${volume}`
+            );
+          }
+          playerRef.current.setVolume?.(volume);
+        }
+      } catch {
+        // Ignore audio errors
       }
 
       // 3. Kiểm tra video kết thúc hiển thị powered by (thay thế interval cũ)
@@ -1319,7 +1326,7 @@ const VideoPlayer = () => {
               !showPoweredBy &&
               !hasShownEndingRef.current
             ) {
-              if (debugInfo.isDevMode) {
+              if (isDevMode) {
                 console.log(
                   "Combined check: Showing powered by at end of song"
                 );
@@ -1335,7 +1342,7 @@ const VideoPlayer = () => {
     }, 8000); // Tăng từ 5 giây lên 8 giây để giảm số lần thực thi
 
     return () => {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log(
           "Clearing combined interval for video:",
           videoState.nowPlayingData?.video_id
@@ -1347,7 +1354,8 @@ const VideoPlayer = () => {
     videoState.nowPlayingData?.video_id,
     volume,
     showPoweredBy,
-    debugInfo.isDevMode,
+    isDevMode,
+    showDebugControls,
   ]);
 
   // Sửa lại logic để hiển thị backup screen khi video data bị mất
@@ -1372,7 +1380,7 @@ const VideoPlayer = () => {
       socket &&
       !skipPlaylistRecoverRef.current
     ) {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Requesting current song info due to data loss");
       }
 
@@ -1386,7 +1394,7 @@ const VideoPlayer = () => {
       const recoveryTimeout = setTimeout(() => {
         // Vẫn chưa có dữ liệu sau 5 giây
         if (!videoState.nowPlayingData && currentVideoRef.current) {
-          if (debugInfo.isDevMode) {
+          if (isDevMode) {
             console.log("Recovery timeout reached, clearing reference");
           }
           // Nếu server không phản hồi, xóa reference để hiển thị welcome screen
@@ -1397,7 +1405,7 @@ const VideoPlayer = () => {
 
       return () => clearTimeout(recoveryTimeout);
     }
-  }, [videoState.nowPlayingData, socket, roomId, debugInfo.isDevMode]);
+  }, [videoState.nowPlayingData, socket, roomId, isDevMode]);
 
   // Handle play song and video events
   useEffect(() => {
@@ -1405,7 +1413,7 @@ const VideoPlayer = () => {
 
     // Xử lý khi nhận bài hát mới từ server
     const handlePlaySong = (data: any) => {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Received play_song event:", data);
       }
 
@@ -1421,7 +1429,7 @@ const VideoPlayer = () => {
     return () => {
       socket.off("play_song", handlePlaySong);
     };
-  }, [socket, debugInfo.isDevMode]);
+  }, [socket, isDevMode]);
 
   // Thêm xử lý cho current_song
   useEffect(() => {
@@ -1429,7 +1437,7 @@ const VideoPlayer = () => {
 
     // Xử lý khi nhận thông tin bài hát hiện tại
     const handleCurrentSong = (data: any) => {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Received current_song event:", data);
       }
 
@@ -1445,13 +1453,13 @@ const VideoPlayer = () => {
     return () => {
       socket.off("current_song", handleCurrentSong);
     };
-  }, [socket, debugInfo.isDevMode]);
+  }, [socket, isDevMode]);
   // Xử lý khi danh sách phát bị xóa
   useEffect(() => {
     if (!socket) return;
 
     const handleNowPlayingCleared = () => {
-      if (debugInfo.isDevMode) {
+      if (isDevMode) {
         console.log("Received now_playing_cleared event");
       }
 
@@ -1463,7 +1471,7 @@ const VideoPlayer = () => {
     return () => {
       socket.off("now_playing_cleared", handleNowPlayingCleared);
     };
-  }, [socket, debugInfo.isDevMode, scheduleHeldVideoRelease]);
+  }, [socket, isDevMode, scheduleHeldVideoRelease]);
 
   // Thêm effect để tự động reset trạng thái lỗi YouTube sau một khoảng thời gian
   // nếu không thể tải backup video
@@ -1476,7 +1484,7 @@ const VideoPlayer = () => {
     ) {
       // Tạo timeout để tự động thử lại sau 30 giây
       const resetTimeout = setTimeout(() => {
-        if (debugInfo.isDevMode) {
+        if (isDevMode) {
           console.log("Auto resetting YouTube error state after timeout");
         }
 
@@ -1503,7 +1511,7 @@ const VideoPlayer = () => {
     backupState.youtubeError,
     backupState.backupUrl,
     backupState.isLoadingBackup,
-    debugInfo.isDevMode,
+    isDevMode,
     videoState.nowPlayingData?.video_id,
     roomId,
     socket,
@@ -1623,24 +1631,19 @@ const VideoPlayer = () => {
       {/* Debug panel temporarily removed to fix white screen issue */}
 
       {/* Simple debug panel - safe version */}
-      {debugInfo.isDevMode && (
+      {isDevMode && (
         <div className="absolute top-4 right-4 z-50 bg-black/90 text-white p-3 rounded-lg text-xs font-mono max-w-xs">
           <div className="flex justify-between items-center mb-2">
             <span className="font-bold">Debug</span>
             <button
               className="px-2 py-1 text-[10px] rounded bg-gray-600 hover:bg-gray-500"
-              onClick={() => {
-                setDebugInfo((prev) => ({
-                  ...prev,
-                  showControls: !prev.showControls,
-                }));
-              }}
+              onClick={() => setShowDebugControls((prev) => !prev)}
             >
-              {debugInfo.showControls ? "Hide" : "Show"}
+              {showDebugControls ? "Hide" : "Show"}
             </button>
           </div>
 
-          {debugInfo.showControls && (
+          {showDebugControls && (
             <div className="space-y-1">
               <div>State: {videoState.isPaused ? "PAUSED" : "PLAYING"}</div>
               <div>
@@ -1648,7 +1651,9 @@ const VideoPlayer = () => {
                 {videoState.nowPlayingData?.video_id?.slice(-8) || "none"}
               </div>
               <div>Backup: {backupState.backupUrl ? "ACTIVE" : "OFF"}</div>
-              <div>Quality: {debugInfo.quality || "unknown"}</div>
+              <div key={debugPanelTick}>
+                Quality: {debugRuntimeRef.current.quality || "unknown"}
+              </div>
               <div>Buffer: {videoState.isBuffering ? "YES" : "NO"}</div>
               <div>Socket: {socketStatus.connected ? "ON" : "OFF"}</div>
             </div>
@@ -1728,7 +1733,7 @@ const VideoPlayer = () => {
             !videoState.nowPlayingData?.video_id && !currentVideoRef.current
           }
           fallbackVideoId={FALLBACK_VIDEO_ID}
-          showControls={debugInfo.isDevMode && debugInfo.showControls}
+          showControls={isDevMode && showDebugControls}
         />
       </div>
 
@@ -1812,7 +1817,7 @@ const VideoPlayer = () => {
         !backupState.backupVideoReady &&
         !backupState.isLoadingBackup &&
         backupState.backupError &&
-        !debugInfo.isDevMode && (
+        !isDevMode && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-50">
             <div className="rounded-full h-16 w-16 border-t-4 border-white">
               <img src={logo} alt="logo" className="w-full h-full" />
@@ -1827,7 +1832,7 @@ const VideoPlayer = () => {
       {backupState.youtubeError &&
         !backupState.backupVideoReady &&
         backupState.isLoadingBackup &&
-        !debugInfo.isDevMode && (
+        !isDevMode && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-50">
             <div className="rounded-full h-16 w-16 border-t-4 border-white">
               <img src={logo} alt="logo" className="w-full h-full" />

@@ -5,6 +5,9 @@
 
 export const YOUTUBE_QUALITY_FALLBACK = "small" as const;
 export const YOUTUBE_QUALITY_NETWORK_CAP = "large" as const; // ~480p for weak connections
+export const YOUTUBE_STARTUP_LOW_QUALITY = "small" as const;
+export const YOUTUBE_ADAPTIVE_QUALITY = "default" as const;
+export const YOUTUBE_STARTUP_LOW_QUALITY_MS = 10_000;
 
 export type YouTubeQualityTarget = {
   setPlaybackQuality?: (quality: string) => void;
@@ -82,4 +85,22 @@ export function applyNetworkAwareQualityCap(
   if (isFallback) return;
   if (!shouldCapQualityForWeakNetwork()) return;
   safeSetPlaybackQuality(target, YOUTUBE_QUALITY_NETWORK_CAP);
+}
+
+/** Video chính: vào nhanh bằng chất lượng thấp trong vài giây đầu. */
+export function applyStartupLowQuality(
+  target: YouTubeQualityTarget | undefined,
+  isFallback: boolean
+): void {
+  if (isFallback) return;
+  safeSetPlaybackQuality(target, YOUTUBE_STARTUP_LOW_QUALITY);
+}
+
+/** Trả lại adaptive để YouTube tự chọn chất lượng theo mạng/thiết bị. */
+export function restoreAdaptiveQuality(
+  target: YouTubeQualityTarget | undefined,
+  isFallback: boolean
+): void {
+  if (isFallback) return;
+  safeSetPlaybackQuality(target, YOUTUBE_ADAPTIVE_QUALITY);
 }
