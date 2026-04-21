@@ -31,6 +31,7 @@ import {
   applyStartupLowQuality,
   enforceFallbackQualityOnChange,
   restoreAdaptiveQuality,
+  shouldForceStartupQualityCap,
   YOUTUBE_STARTUP_LOW_QUALITY,
   YOUTUBE_STARTUP_LOW_QUALITY_MS,
 } from "./youtubePlaybackQuality";
@@ -714,7 +715,7 @@ const VideoPlayer = () => {
               return;
             }
             player.setPlaybackQuality?.(YOUTUBE_STARTUP_LOW_QUALITY);
-          }, 500);
+          }, 3000);
 
           if (restoreAdaptiveQualityTimerRef.current !== null) {
             clearTimeout(restoreAdaptiveQualityTimerRef.current);
@@ -878,7 +879,13 @@ const VideoPlayer = () => {
 
       const isStartupLockActive =
         !isPlayingFallback && Date.now() < startupQualityLockUntilRef.current;
-      if (isStartupLockActive && event.data !== YOUTUBE_STARTUP_LOW_QUALITY) {
+      if (
+        shouldForceStartupQualityCap(
+          event.data,
+          isStartupLockActive,
+          isPlayingFallback
+        )
+      ) {
         event.target.setPlaybackQuality(YOUTUBE_STARTUP_LOW_QUALITY);
       }
     },

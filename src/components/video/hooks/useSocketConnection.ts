@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef } from "react";
-import io, { Socket } from "socket.io-client";
+import io from "socket.io-client";
 import { SocketStatus, VideoTurnedOffData } from "../types";
 
 // Tạo một global socket để tránh nhiều kết nối mới
-let globalSocket: Socket | null = null;
+type SocketInstance = ReturnType<typeof io>;
+let globalSocket: SocketInstance | null = null;
 
 interface UseSocketConnectionProps {
   roomId: string;
@@ -13,7 +14,7 @@ interface UseSocketConnectionProps {
 }
 
 interface UseSocketConnectionResult {
-  socket: Socket | null;
+  socket: SocketInstance | null;
   socketStatus: SocketStatus;
   isVideoOff: boolean;
 }
@@ -24,7 +25,7 @@ export function useSocketConnection({
   onVideosOff,
   onVideosOn,
 }: UseSocketConnectionProps): UseSocketConnectionResult {
-  const [socket, setSocket] = useState<Socket | null>(globalSocket);
+  const [socket, setSocket] = useState<SocketInstance | null>(globalSocket);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>({
     connected: globalSocket?.connected || false,

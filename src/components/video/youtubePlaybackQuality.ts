@@ -5,9 +5,10 @@
 
 export const YOUTUBE_QUALITY_FALLBACK = "small" as const;
 export const YOUTUBE_QUALITY_NETWORK_CAP = "large" as const; // ~480p for weak connections
-export const YOUTUBE_STARTUP_LOW_QUALITY = "hd720" as const;
+export const YOUTUBE_STARTUP_LOW_QUALITY = "large" as const; // ~480p in startup window
 export const YOUTUBE_ADAPTIVE_QUALITY = "default" as const;
 export const YOUTUBE_STARTUP_LOW_QUALITY_MS = 10_000;
+const STARTUP_QUALITY_BLOCKLIST = new Set(["hd1080", "highres"]);
 
 export type YouTubeQualityTarget = {
   setPlaybackQuality?: (quality: string) => void;
@@ -94,6 +95,15 @@ export function applyStartupLowQuality(
 ): void {
   if (isFallback) return;
   safeSetPlaybackQuality(target, YOUTUBE_STARTUP_LOW_QUALITY);
+}
+
+export function shouldForceStartupQualityCap(
+  reportedQuality: string,
+  isStartupLockActive: boolean,
+  isFallback: boolean
+): boolean {
+  if (isFallback || !isStartupLockActive) return false;
+  return STARTUP_QUALITY_BLOCKLIST.has(reportedQuality);
 }
 
 /** Trả lại adaptive để YouTube tự chọn chất lượng theo mạng/thiết bị. */
