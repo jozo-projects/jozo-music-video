@@ -8,8 +8,8 @@ interface PauseOverlayProps {
 
 const PauseOverlay: React.FC<PauseOverlayProps> = ({ nowPlayingData }) => {
   return (
-    <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-[30]">
-      <div className="flex flex-col items-center p-8 rounded-lg bg-black/30 backdrop-blur-md shadow-2xl">
+    <div className="absolute inset-0 flex items-center justify-center z-[30]">
+      <div className="flex flex-col items-center p-8 rounded-lg bg-black/60 shadow-2xl">
         <img
           src={logo}
           alt="logo"

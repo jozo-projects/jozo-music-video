@@ -2,43 +2,92 @@
 import { FC, useEffect, useRef, useState } from "react";
 import { YouTubePlayerRef } from "./types";
 import {
-  applyInitialPlaybackQualityIfFallback,
-  enforceFallbackQualityOnChange,
+  applyInitialPlaybackQuality,
+  enforcePreferredQualityOnChange,
 } from "./youtubePlaybackQuality";
+import { resolveLowPowerMode } from "./deviceCapability";
 
-const IS_DEV = import.meta.env.DEV || import.meta.env.MODE === "development";
+// Detect 1 lần khi module load, cố định trong suốt phiên.
+const IS_LOW_POWER = resolveLowPowerMode();
+const IS_DEV = import.meta.env.DEV;
+
 const devLog = (...args: unknown[]) => {
   if (IS_DEV) console.log(...args);
-};
-const devWarn = (...args: unknown[]) => {
-  if (IS_DEV) console.warn(...args);
 };
 const devError = (...args: unknown[]) => {
   if (IS_DEV) console.error(...args);
 };
 
-// Dùng domain chính youtube.com. Trước đây thử youtube-nocookie.com nhưng
-// một số video bị hạn chế embed qua nocookie + WebView Android cũ trên
-// đầu box có thể stuck load → quay lại youtube.com cho tương thích.
+// ID ổn định cho placeholder div — YT.Player sẽ replace element này thành <iframe>.
+const PLAYER_ELEMENT_ID = "youtube-player";
 const YOUTUBE_EMBED_HOST = "https://www.youtube.com";
 
-// Biến global để theo dõi trạng thái
-let isYouTubeApiLoaded = !!(window as any).YT && !!(window as any).YT.Player;
-let globalYouTubePlayer: any = null;
+// ---------------- YT IFrame API loader (global, load 1 lần) ----------------
+let apiLoaded = !!(window as any).YT && !!(window as any).YT.Player;
+let apiLoadingPromise: Promise<void> | null = null;
 
+function loadYouTubeApi(): Promise<void> {
+  if (apiLoaded) return Promise.resolve();
+  if (apiLoadingPromise) return apiLoadingPromise;
+
+  apiLoadingPromise = new Promise<void>((resolve) => {
+    const finish = () => {
+      apiLoaded = true;
+      resolve();
+    };
+
+    // API có thể đã sẵn trong window nhưng flag chưa kịp cập nhật
+    if ((window as any).YT && (window as any).YT.Player) {
+      finish();
+      return;
+    }
+
+    const prevCb = (window as any).onYouTubeIframeAPIReady;
+    (window as any).onYouTubeIframeAPIReady = () => {
+      try {
+        prevCb?.();
+      } catch {
+        // ignore
+      }
+      finish();
+    };
+
+    if (
+      !document.querySelector(
+        'script[src="https://www.youtube.com/iframe_api"]'
+      )
+    ) {
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      tag.async = true;
+      document.head.appendChild(tag);
+    }
+  });
+
+  return apiLoadingPromise;
+}
+
+// ---------------- Component ----------------
 interface YouTubePlayerIframeProps {
   playerRef: React.RefObject<YouTubePlayerRef>;
-  videoId: string | undefined;
+  videoId: string;
   onReady: (event: any) => void;
   onStateChange: (event: any) => void;
   onError: (event: any) => void;
   onPlaybackQualityChange: (event: any) => void;
-  isFallback: boolean;
-  fallbackVideoId: string;
+  isFallback?: boolean;
   startSeconds?: number;
   showControls?: boolean;
 }
 
+/**
+ * Player IFrame YouTube đơn giản hoá:
+ *  - Khởi tạo iframe MỘT lần duy nhất cho cả vòng đời component.
+ *  - Đổi bài = loadVideoById (không destroy/create iframe).
+ *  - Callback cha truyền vào được lưu trong ref → parent re-render
+ *    không làm effect chạy lại.
+ *  - Cha chỉ nên mount component này khi thực sự có bài để phát.
+ */
 const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   playerRef,
   videoId,
@@ -46,308 +95,151 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   onStateChange,
   onError,
   onPlaybackQualityChange,
-  isFallback,
-  fallbackVideoId,
+  isFallback = false,
   startSeconds,
   showControls = false,
 }) => {
-  const [apiLoaded, setApiLoaded] = useState(isYouTubeApiLoaded);
-  const lastVideoIdRef = useRef<string | undefined>(videoId);
+  const [apiReady, setApiReady] = useState(apiLoaded);
+  const playerInstanceRef = useRef<any>(null);
   const initializingRef = useRef(false);
-  const playerInitializedRef = useRef(false);
 
-  // Wrapper function for onReady to ensure playerRef is properly set
-  const handleOnReady = (event: any) => {
-    try {
-      // Retrieve the player object
-      const player = event.target;
+  // Ref-hoá callback để effect init không phụ thuộc vào hàm parent.
+  const onReadyRef = useRef(onReady);
+  const onStateChangeRef = useRef(onStateChange);
+  const onErrorRef = useRef(onError);
+  const onQualityRef = useRef(onPlaybackQualityChange);
+  onReadyRef.current = onReady;
+  onStateChangeRef.current = onStateChange;
+  onErrorRef.current = onError;
+  onQualityRef.current = onPlaybackQualityChange;
 
-      // Test each method by actually calling it (in a safe way)
-      // This ensures the 'this' context is valid
-      let hasValidMethods = false;
+  // Cố định flag isFallback tại thời điểm init — tránh effect init phụ thuộc
+  // vào prop thay đổi và đụng độ với việc reuse player.
+  const isFallbackAtInitRef = useRef(isFallback);
+  isFallbackAtInitRef.current = isFallback;
 
-      try {
-        // // Try to get current video data (this is a common source of 'this is undefined' errors)
-        // // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const videoData = player.getVideoData();
-        // // Try to get current time and duration (just to verify they work with proper 'this' binding)
-        // // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const currentTime = player.getCurrentTime();
-        // // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const duration = player.getDuration();
-
-        // Make sure the methods needed for playback control exist
-        hasValidMethods =
-          typeof player.seekTo === "function" &&
-          typeof player.playVideo === "function" &&
-          typeof player.pauseVideo === "function" &&
-          typeof player.loadVideoById === "function" &&
-          typeof player.setPlaybackQuality === "function";
-
-        devLog("YouTube player successfully initialized with methods");
-
-        try {
-          if (player && typeof player.unloadModule === "function") {
-            player.unloadModule("captions");
-          }
-          if (player && typeof player.setOption === "function") {
-            player.setOption("captions", "track", {});
-            player.setOption("captions", "reload", false);
-            player.setOption("captions", "track", { languageCode: "" });
-          }
-        } catch (e) {
-          devError("Error disabling captions:", e);
-        }
-      } catch (methodError) {
-        devError("Error verifying YouTube player methods:", methodError);
-        hasValidMethods = false;
-      }
-
-      if (!hasValidMethods) {
-        devError(
-          "YouTube player is missing required methods or has invalid context"
-        );
-
-        if (!initializingRef.current) {
-          setTimeout(() => {
-            devLog("Attempting to reinitialize YouTube player...");
-            initializingRef.current = false;
-            playerInitializedRef.current = false;
-          }, 1000);
-        }
-        return;
-      }
-
-      applyInitialPlaybackQualityIfFallback(player, isFallback);
-
-      // Update references only when we've verified the methods work
-      // @ts-expect-error - bỏ qua lỗi TypeScript
-      playerRef.current = player;
-      globalYouTubePlayer = player;
-      playerInitializedRef.current = true;
-
-      onReady(event);
-    } catch (error) {
-      devError("Fatal error in YouTube player onReady handler:", error);
-    }
-  };
-
+  // 1. Load YT IFrame API.
   useEffect(() => {
-    // Nếu đã có player toàn cục và chưa có player ref, gán nó
-    if (
-      globalYouTubePlayer &&
-      !playerRef.current &&
-      !playerInitializedRef.current
-    ) {
-      try {
-        // Verify the global player has required methods
-        const hasAllMethods =
-          typeof globalYouTubePlayer.getVideoData === "function" &&
-          typeof globalYouTubePlayer.getCurrentTime === "function" &&
-          typeof globalYouTubePlayer.getDuration === "function";
+    if (apiReady) return;
+    let cancelled = false;
+    loadYouTubeApi().then(() => {
+      if (!cancelled) setApiReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiReady]);
 
-        if (hasAllMethods) {
-          // @ts-expect-error - bỏ qua lỗi TypeScript
-          playerRef.current = globalYouTubePlayer;
-          playerInitializedRef.current = true;
-        } else {
-          devWarn("Global YouTube player exists but has missing methods");
-          globalYouTubePlayer = null;
-        }
-      } catch (error) {
-        devError("Error assigning global YouTube player:", error);
-      }
-    }
+  // 2. Khởi tạo player 1 lần khi API sẵn sàng và có videoId.
+  useEffect(() => {
+    if (!apiReady || !videoId) return;
+    if (playerInstanceRef.current || initializingRef.current) return;
 
-    // Nếu API đã được tải
-    if ((window as any).YT && (window as any).YT.Player && !apiLoaded) {
-      isYouTubeApiLoaded = true;
-      setApiLoaded(true);
-    }
+    const container = document.getElementById(PLAYER_ELEMENT_ID);
+    if (!container) return;
 
-    // Nếu video ID không thay đổi và player đã tồn tại, không làm gì cả
-    if (
-      lastVideoIdRef.current === videoId &&
-      playerRef.current &&
-      playerInitializedRef.current
-    ) {
-      return;
-    }
+    initializingRef.current = true;
 
-    // Nếu đang khởi tạo, tránh gọi nhiều lần
-    if (initializingRef.current) {
-      return;
-    }
+    try {
+      devLog("Khởi tạo YouTube player:", videoId);
 
-    lastVideoIdRef.current = videoId;
-
-    const PROD_ORIGIN = "https://video.jozo.com.vn";
-    const ORIGIN = import.meta.env.PROD ? PROD_ORIGIN : window.location.origin;
-
-    // Hàm khởi tạo player
-    const initializePlayer = () => {
-      if (initializingRef.current) return;
-      initializingRef.current = true;
-
-      // Nếu player đã tồn tại, chỉ cần load video mới
-      if (playerRef.current && playerInitializedRef.current) {
-        try {
-          const currentVideoId = playerRef.current.getVideoData?.()?.video_id;
-          if (videoId && currentVideoId !== videoId) {
-            devLog("Tải video mới vào player hiện có:", videoId);
-            playerRef.current.loadVideoById({
-              videoId: videoId,
-              startSeconds: startSeconds ?? 0,
-            });
-          }
-          initializingRef.current = false;
-          return;
-        } catch (e) {
-          devError("Lỗi khi tải video mới:", e);
-          playerInitializedRef.current = false;
-        }
-      }
-
-      const playerContainer = document.getElementById("youtube-player");
-      if (!playerContainer) {
-        devError("Không tìm thấy container YouTube player");
-        initializingRef.current = false;
-        return;
-      }
-
-      try {
-        if (
-          globalYouTubePlayer &&
-          typeof globalYouTubePlayer.destroy === "function"
-        ) {
-          try {
-            globalYouTubePlayer.destroy();
-          } catch (error) {
-            devWarn("Error destroying previous player:", error);
-          }
-          globalYouTubePlayer = null;
-        }
-
-        devLog(
-          "Khởi tạo YouTube player mới với video:",
-          videoId || fallbackVideoId
-        );
-
-        const playerVars = {
+      const player = new (window as any).YT.Player(PLAYER_ELEMENT_ID, {
+        videoId,
+        host: YOUTUBE_EMBED_HOST,
+        playerVars: {
           autoplay: 1,
           controls: showControls ? 1 : 0,
           modestbranding: 1,
           rel: 0,
-          fs: 1,
+          fs: 0,
           iv_load_policy: 3,
           enablejsapi: 1,
           playsinline: 1,
-          mute: 0,
           disablekb: 1,
-          html5: 1,
-          ...(isFallback
-            ? {
-                vq: "small",
-                suggestedQuality: "small" as const,
-                quality: "small",
-              }
-            : {}),
-          loop: videoId ? 0 : 1,
-          playlist: !videoId ? fallbackVideoId : undefined,
-          hl: "vi",
           cc_load_policy: 0,
-          cc_lang_pref: "none", // Không ưu tiên ngôn ngữ phụ đề nào
-          color: "white",
-          origin: ORIGIN,
-        };
+          cc_lang_pref: "none",
+          hl: "vi",
+          start: startSeconds && startSeconds > 0 ? Math.floor(startSeconds) : 0,
+        },
+        events: {
+          onReady: (event: any) => {
+            try {
+              const target = event.target;
+              // Tắt captions — mặc định tv-box hay bật tiếng Việt auto-translate.
+              try {
+                target.unloadModule?.("captions");
+                target.setOption?.("captions", "track", {});
+              } catch {
+                // ignore
+              }
 
-        globalYouTubePlayer = new (window as any).YT.Player("youtube-player", {
-          videoId: videoId || (isFallback ? fallbackVideoId : undefined),
-          host: YOUTUBE_EMBED_HOST,
-          playerVars,
-          events: {
-            onReady: handleOnReady,
-            onStateChange,
-            onPlaybackQualityChange: (event: {
-              data: string;
-              target?: any;
-            }) => {
-              onPlaybackQualityChange(event);
-              enforceFallbackQualityOnChange(
-                isFallback,
-                event.data,
-                event.target
+              applyInitialPlaybackQuality(
+                target,
+                isFallbackAtInitRef.current,
+                IS_LOW_POWER
               );
-            },
-            onError,
+
+              // @ts-expect-error — gán player vào ref cha
+              playerRef.current = target;
+            } catch (e) {
+              devError("onReady setup error:", e);
+            }
+            onReadyRef.current(event);
           },
-        });
+          onStateChange: (event: any) => onStateChangeRef.current(event),
+          onError: (event: any) => onErrorRef.current(event),
+          onPlaybackQualityChange: (event: any) => {
+            onQualityRef.current(event);
+            enforcePreferredQualityOnChange(
+              isFallbackAtInitRef.current,
+              IS_LOW_POWER,
+              event?.data,
+              event?.target
+            );
+          },
+        },
+      });
 
-        initializingRef.current = false;
-      } catch (error) {
-        devError("Lỗi khởi tạo YouTube player:", error);
-        initializingRef.current = false;
-        playerInitializedRef.current = false;
-      }
-    };
-
-    if (!apiLoaded && !(window as any).YT) {
-      if (
-        !document.querySelector(
-          'script[src="https://www.youtube.com/iframe_api"]'
-        )
-      ) {
-        devLog("Đang tải YouTube API script");
-        const tag = document.createElement("script");
-        tag.src = "https://www.youtube.com/iframe_api";
-
-        tag.onload = () => {
-          devLog("Tải YouTube API thành công");
-          isYouTubeApiLoaded = true;
-          setApiLoaded(true);
-        };
-
-        const firstScriptTag = document.getElementsByTagName("script")[0];
-        firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
-
-        (window as any).onYouTubeIframeAPIReady = () => {
-          devLog("YouTube iframe API đã sẵn sàng");
-          isYouTubeApiLoaded = true;
-          setApiLoaded(true);
-          initializePlayer();
-        };
-      }
-    } else if (apiLoaded || ((window as any).YT && (window as any).YT.Player)) {
-      initializePlayer();
+      playerInstanceRef.current = player;
+    } catch (e) {
+      devError("Lỗi khởi tạo YouTube player:", e);
+    } finally {
+      initializingRef.current = false;
     }
 
-    // Không cần cleanup để tránh tái tạo player
-    return () => {
-      initializingRef.current = false;
-    };
-  }, [
-    videoId,
-    apiLoaded,
-    playerRef,
-    onReady,
-    onStateChange,
-    onError,
-    onPlaybackQualityChange,
-    isFallback,
-    fallbackVideoId,
-  ]);
+    // Không cleanup destroy — giữ 1 player duy nhất cho vòng đời component.
+    // Khi unmount (queue clear), React sẽ remove placeholder div → iframe bị
+    // gỡ theo, destroy thủ công không cần thiết.
+  }, [apiReady, videoId, playerRef, showControls, startSeconds]);
 
-  return (
-    <div
-      id="youtube-player"
-      style={{
-        position: "relative",
-        width: "100%",
-        height: "100%",
-        overflow: "hidden",
-      }}
-    />
-  );
+  // 3. Đổi bài → loadVideoById (tái sử dụng iframe, không destroy).
+  useEffect(() => {
+    const player = playerInstanceRef.current;
+    if (!player || !videoId) return;
+    if (typeof player.loadVideoById !== "function") return;
+
+    try {
+      const currentId = player.getVideoData?.()?.video_id;
+      if (currentId === videoId) return;
+
+      devLog("Load video mới vào player hiện có:", videoId);
+      player.loadVideoById({
+        videoId,
+        startSeconds: startSeconds ?? 0,
+      });
+    } catch (e) {
+      devError("loadVideoById failed:", e);
+    }
+  }, [videoId, startSeconds]);
+
+  // Placeholder div — YT.Player replace element này thành <iframe>.
+  // Style inline cố định → không thay đổi giữa các render.
+  return <div id={PLAYER_ELEMENT_ID} style={PLAYER_STYLE} />;
+};
+
+const PLAYER_STYLE: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
 };
 
 export default YouTubePlayerIframe;
