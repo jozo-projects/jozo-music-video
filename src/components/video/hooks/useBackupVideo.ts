@@ -61,7 +61,19 @@ export function useBackupVideo({
   const handleYouTubeError = useCallback(async () => {
     console.log("===> INSIDE handleYouTubeError - HOOK FUNCTION <===");
 
-    // Kiểm tra đã gọi quá gần (trong 5 giây) chưa
+    // Sử dụng backupStateRef thay vì backupState để luôn lấy giá trị mới nhất
+    const currentBackupState = backupStateRef.current;
+
+    // Nếu đã có backupUrl, bỏ qua hoàn toàn (tránh gọi trùng).
+    if (currentBackupState.backupUrl) {
+      console.log("[SKIP] Already using backup URL, no API call needed");
+      return;
+    }
+
+    // Rate limit 5s để tránh spam API khi retry dồn dập.
+    // Nếu bị chặn, phải RESET state kẹt (isLoadingBackup / youtubeError) để
+    // UI không treo loading — nhiều nơi upstream pre-set các cờ này trước
+    // khi gọi handleYouTubeError.
     const now = Date.now();
     const secondsSinceLastCall = (now - lastApiCallTimeRef.current) / 1000;
     if (secondsSinceLastCall < 5) {
@@ -70,16 +82,10 @@ export function useBackupVideo({
           1
         )}s since last call)`
       );
-      return;
-    }
-
-    // Sử dụng backupStateRef thay vì backupState để luôn lấy giá trị mới nhất
-    const currentBackupState = backupStateRef.current;
-
-    // Nếu đã đang trong trạng thái lỗi hoặc đang tải backup, không tiếp tục
-    if (currentBackupState.backupUrl || currentBackupState.isLoadingBackup) {
-      console.log(
-        "[SKIP] Already loading or using backup URL, no API call needed"
+      setBackupState((prev) =>
+        prev.isLoadingBackup
+          ? { ...prev, isLoadingBackup: false }
+          : prev
       );
       return;
     }
@@ -93,7 +99,12 @@ export function useBackupVideo({
       console.error(
         `Missing params: videoId=${currentVideoId}, roomId=${currentRoomId}`
       );
-      // Không có thông tin cần thiết để gọi API
+      // Reset state kẹt để không treo loading vĩnh viễn.
+      setBackupState((prev) =>
+        prev.isLoadingBackup || prev.youtubeError
+          ? { ...prev, isLoadingBackup: false, youtubeError: false }
+          : prev
+      );
       return;
     }
 

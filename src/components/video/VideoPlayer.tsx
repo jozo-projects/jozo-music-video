@@ -577,6 +577,24 @@ const VideoPlayer = () => {
     setBackupState,
   ]);
 
+  // Watchdog: nếu isLoadingBackup kẹt > 15s mà chưa có backupUrl → force reset
+  // (phòng các case rate-limit / API hang / socket drop làm loading treo vĩnh viễn).
+  useEffect(() => {
+    if (!backupState.isLoadingBackup || backupState.backupUrl) return;
+    const watchdog = setTimeout(() => {
+      setBackupState((prev) =>
+        prev.isLoadingBackup && !prev.backupUrl
+          ? { ...prev, isLoadingBackup: false, youtubeError: false }
+          : prev
+      );
+    }, 15000);
+    return () => clearTimeout(watchdog);
+  }, [
+    backupState.isLoadingBackup,
+    backupState.backupUrl,
+    setBackupState,
+  ]);
+
   if (isVideoOff) {
     return <RecordingStudio />;
   }
@@ -599,7 +617,7 @@ const VideoPlayer = () => {
   return (
     <div
       ref={containerRef}
-      className="relative w-screen h-screen"
+      className="relative w-screen h-screen bg-black"
       onClick={handleDoubleTap}
     >
       {/* CSS tối thiểu: ẩn mọi overlay của YouTube (UI, endscreen, error…).
@@ -706,11 +724,14 @@ const VideoPlayer = () => {
         <img src={logo} alt="logo" className="w-full h-full" />
       </div>
 
-      {/* Pause overlay — bg đen mờ thuần, KHÔNG dùng backdrop-blur. */}
-      {videoState.isPaused && hasActiveSong && (
+      {/* Pause overlay — bg đen mờ thuần, KHÔNG dùng backdrop-blur.
+          Bắt buộc check nowPlayingData !== null: hasActiveSong có thể TRUE
+          do currentVideoRef cache, nhưng nowPlayingData có thể đã bị clear
+          (now_playing_cleared) → không được force-unwrap! */}
+      {videoState.isPaused && hasActiveSong && videoState.nowPlayingData && (
         <>
           <div className="absolute inset-0 z-[25] bg-black/50" />
-          <PauseOverlay nowPlayingData={videoState.nowPlayingData!} />
+          <PauseOverlay nowPlayingData={videoState.nowPlayingData} />
         </>
       )}
 
