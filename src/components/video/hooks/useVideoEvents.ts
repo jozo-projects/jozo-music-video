@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { PlaySongEvent, VideoEvent, VideoState } from "../types";
-import { FALLBACK_VIDEO_ID, SONG_TRANSITION_BUFFER_MS } from "../constants";
 
 const IS_DEV = import.meta.env.DEV || import.meta.env.MODE === "development";
 const devLog = (...args: unknown[]) => {
@@ -77,17 +76,6 @@ export function useVideoEvents({
     lastEmitTime?: number;
   }>({ currentTime: 0, isPlaying: false });
 
-  const deferredFallbackLoadTimerRef = useRef<ReturnType<
-    typeof setTimeout
-  > | null>(null);
-
-  const cancelDeferredFallbackLoad = useCallback(() => {
-    if (deferredFallbackLoadTimerRef.current !== null) {
-      clearTimeout(deferredFallbackLoadTimerRef.current);
-      deferredFallbackLoadTimerRef.current = null;
-    }
-  }, []);
-
   // Update refs when values change
   useEffect(() => {
     videoStateRef.current = videoState;
@@ -105,8 +93,6 @@ export function useVideoEvents({
       devLog("Received current song after reconnect:", data);
 
       if (!data || !data.video_id) return;
-
-      cancelDeferredFallbackLoad();
 
       // Check if song is different from current
       if (
@@ -162,9 +148,8 @@ export function useVideoEvents({
 
     return () => {
       socket.off("current_song", handleCurrentSong);
-      cancelDeferredFallbackLoad();
     };
-  }, [socket, cancelDeferredFallbackLoad]);
+  }, [socket]);
 
   // Handle play song and video events
   useEffect(() => {
@@ -173,7 +158,6 @@ export function useVideoEvents({
     // Handle play_song event
     const handlePlaySong = (data: PlaySongEvent) => {
       devLog("Received play song:", data);
-      cancelDeferredFallbackLoad();
       setIsChangingSong(true);
 
       // Reset lastTimeRef để bắt đầu emit ngay lập tức
@@ -306,26 +290,11 @@ export function useVideoEvents({
 
     // Handle now_playing_cleared event
     const handleNowPlayingCleared = () => {
-      cancelDeferredFallbackLoad();
-
       setVideoState((prev) => ({
         ...prev,
         nowPlayingData: null,
         currentVideoId: "",
       }));
-
-      deferredFallbackLoadTimerRef.current = setTimeout(() => {
-        deferredFallbackLoadTimerRef.current = null;
-        if (
-          !videoStateRef.current.nowPlayingData?.video_id &&
-          playerRef.current?.loadVideoById
-        ) {
-          playerRef.current.loadVideoById({
-            videoId: FALLBACK_VIDEO_ID,
-            startSeconds: 0,
-          });
-        }
-      }, SONG_TRANSITION_BUFFER_MS);
     };
 
     // Register event listeners
@@ -337,9 +306,8 @@ export function useVideoEvents({
       socket.off("play_song", handlePlaySong);
       socket.off("video_event", handlePlaybackEvent);
       socket.off("now_playing_cleared", handleNowPlayingCleared);
-      cancelDeferredFallbackLoad();
     };
-  }, [socket, backupState.backupUrl, cancelDeferredFallbackLoad]);
+  }, [socket, backupState.backupUrl]);
 
   // Video end handler
   const handleVideoEnd = useCallback(() => {

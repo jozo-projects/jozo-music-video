@@ -1,6 +1,6 @@
 import React from "react";
 import { CUTE_MESSAGES } from "./constants";
-import vietnamFlag from "../../assets/hpny.png";
+import welcomeBackground from "../../assets/jozo-party-bg.png";
 
 interface WelcomeScreenProps {
   currentMessageIndex: number;
@@ -11,11 +11,11 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 }) => {
   return (
     <div className="absolute inset-0 z-[30] flex flex-col">
-      {/* Background with Vietnam Flag - Full Screen */}
+      {/* Nền Jozo — toàn màn hình */}
       <div className="absolute inset-0 w-full h-full">
         <img
-          src={vietnamFlag}
-          alt="Tet Nguyen Dan"
+          src={welcomeBackground}
+          alt="Jozo Karaoke Bash"
           className="w-full h-full object-cover"
         />
       </div>
