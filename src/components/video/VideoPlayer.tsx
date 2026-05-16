@@ -249,8 +249,17 @@ const VideoPlayer = () => {
     (event: YouTubePlayerEvent) => {
       if (!playerRef.current) return;
 
-      const YT = (window as any).YT?.PlayerState;
-      if (!YT) return;
+      // Ignore YouTube player state changes if backup video is active or loading
+      if (backupState.backupUrl || backupState.isLoadingBackup) return;
+
+      const YT = (window as any).YT?.PlayerState || {
+        UNSTARTED: -1,
+        ENDED: 0,
+        PLAYING: 1,
+        PAUSED: 2,
+        BUFFERING: 3,
+        CUED: 5
+      };
 
       switch (event.data) {
         case YT.BUFFERING:
@@ -364,6 +373,8 @@ const VideoPlayer = () => {
       volume,
       videoState.nowPlayingData,
       isChangingSong,
+      backupState.backupUrl,
+      backupState.isLoadingBackup,
     ]
   );
 
