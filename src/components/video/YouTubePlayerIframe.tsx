@@ -118,6 +118,13 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   const isFallbackAtInitRef = useRef(isFallback);
   isFallbackAtInitRef.current = isFallback;
 
+  // Ref hoá startSeconds để effect init/load không cần startSeconds trong deps.
+  // startSeconds (initialStartSeconds) dùng Date.now() nên thay đổi mỗi render —
+  // nếu để trong deps sẽ khiến Effect #3 chạy liên tục và có thể trigger
+  // loadVideoById khi getVideoData() tạm thời trả về giá trị không đúng.
+  const startSecondsRef = useRef(startSeconds);
+  startSecondsRef.current = startSeconds;
+
   // 1. Load YT IFrame API.
   useEffect(() => {
     if (apiReady) return;
@@ -159,7 +166,10 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           cc_load_policy: 0,
           cc_lang_pref: "none",
           hl: "vi",
-          start: startSeconds && startSeconds > 0 ? Math.floor(startSeconds) : 0,
+          start:
+            startSecondsRef.current && startSecondsRef.current > 0
+              ? Math.floor(startSecondsRef.current)
+              : 0,
         },
         events: {
           onReady: (event: any) => {
@@ -210,9 +220,13 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
     // Không cleanup destroy — giữ 1 player duy nhất cho vòng đời component.
     // Khi unmount (queue clear), React sẽ remove placeholder div → iframe bị
     // gỡ theo, destroy thủ công không cần thiết.
-  }, [apiReady, videoId, playerRef, showControls, startSeconds]);
+  // startSeconds được đọc từ startSecondsRef (luôn mới nhất) nên không cần
+  // trong deps — tránh re-run effect mỗi khi Date.now() thay đổi.
+  }, [apiReady, videoId, playerRef, showControls]);
 
   // 3. Đổi bài → loadVideoById (tái sử dụng iframe, không destroy).
+  // Chỉ phụ thuộc videoId — startSeconds lấy từ ref (luôn mới nhất) để tránh
+  // effect chạy lại mỗi render do initialStartSeconds dùng Date.now().
   useEffect(() => {
     const player = playerInstanceRef.current;
     if (!player || !videoId) return;
@@ -225,12 +239,12 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
       devLog("Load video mới vào player hiện có:", videoId);
       player.loadVideoById({
         videoId,
-        startSeconds: startSeconds ?? 0,
+        startSeconds: startSecondsRef.current ?? 0,
       });
     } catch (e) {
       devError("loadVideoById failed:", e);
     }
-  }, [videoId, startSeconds]);
+  }, [videoId]);
 
   // Placeholder div — YT.Player replace element này thành <iframe>.
   // Style inline cố định → không thay đổi giữa các render.
