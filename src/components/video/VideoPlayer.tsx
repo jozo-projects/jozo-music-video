@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { logo } from "../../assets";
 import { RecordingStudio } from "../../RecordingStudio";
-import { CUTE_MESSAGES, FALLBACK_VIDEO_ID } from "./constants";
+import { FALLBACK_VIDEO_ID } from "./constants";
 import { fetchRoomNowPlaying } from "./fetchRoomNowPlaying";
 import { useBackupVideo } from "./hooks/useBackupVideo";
 import { useSocketConnection } from "./hooks/useSocketConnection";
@@ -78,7 +78,6 @@ const VideoPlayer = () => {
 
   const [isChangingSong, setIsChangingSong] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
   const [volume, setVolume] = useState(100);
   const [showTitle, setShowTitle] = useState(true);
   const [volumeToast, setVolumeToast] = useState<VolumeToast>({
@@ -377,14 +376,6 @@ const VideoPlayer = () => {
       backupState.isLoadingBackup,
     ]
   );
-
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      setCurrentMessageIndex((prev) => (prev + 1) % CUTE_MESSAGES.length);
-    }, 5000);
-
-    return () => clearInterval(intervalId);
-  }, []);
 
   // Show/hide song title: visible 10s đầu mỗi bài mới; khi pause luôn hiện.
   useEffect(() => {
@@ -888,7 +879,7 @@ const VideoPlayer = () => {
       )}
 
       {/* Welcome screen khi không có bài. */}
-      {!hasActiveSong && <WelcomeScreen currentMessageIndex={currentMessageIndex} />}
+      {!hasActiveSong && <WelcomeScreen />}
 
       {videoState.nowPlayingData && showTitle && hasActiveSong && (
         <div className="absolute top-4 left-4 z-50 bg-black p-4 rounded-lg text-white">
