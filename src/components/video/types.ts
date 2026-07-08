@@ -99,4 +99,8 @@ export interface BackupVideoProps {
   socket: typeof Socket | null;
   onVideoReady: () => void;
   onVideoEnd: () => void;
+  /** Giữ backup HLS khi videoId đổi (ví dụ ?hlsVideoId= test mode). */
+  preserveBackupOnVideoChange?: boolean;
+  /** URL backup/HLS khởi tạo sẵn (chế độ HLS-only). */
+  initialBackupUrl?: string;
 }

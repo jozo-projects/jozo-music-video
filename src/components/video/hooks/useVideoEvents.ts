@@ -48,6 +48,8 @@ interface UseVideoEventsProps {
   backupState: BackupState;
   setBackupState: React.Dispatch<React.SetStateAction<BackupState>>;
   onSongEnded?: () => void; // Thêm callback tùy chọn khi bài hát kết thúc
+  /** Không reset backup/HLS khi socket đổi bài (chế độ test HLS). */
+  hlsOnlyMode?: boolean;
 }
 
 export function useVideoEvents({
@@ -62,6 +64,7 @@ export function useVideoEvents({
   backupState,
   setBackupState,
   onSongEnded,
+  hlsOnlyMode = false,
 }: UseVideoEventsProps) {
   // Create refs to store the latest values without triggering re-renders
   const videoStateRef = useRef(videoState);
@@ -115,14 +118,18 @@ export function useVideoEvents({
           isPaused: false,
         }));
 
-        // Reset backup states
-        setBackupState({
-          backupUrl: "",
-          isLoadingBackup: false,
-          backupError: false,
-          backupVideoReady: false,
-          youtubeError: false,
-        });
+        // Reset backup states (bỏ qua khi đang test HLS-only)
+        if (!hlsOnlyMode) {
+          setBackupState({
+            backupUrl: "",
+            isLoadingBackup: false,
+            backupError: false,
+            backupVideoReady: false,
+            youtubeError: false,
+          });
+        }
+
+        if (hlsOnlyMode) return;
 
         if (playerRef.current?.loadVideoById) {
           // Thêm mới: Đảm bảo player không bị mute trước khi load video mới
@@ -174,14 +181,18 @@ export function useVideoEvents({
         isPaused: false,
       }));
 
-      // Reset backup states
-      setBackupState({
-        backupUrl: "",
-        isLoadingBackup: false,
-        backupError: false,
-        backupVideoReady: false,
-        youtubeError: false,
-      });
+      // Reset backup states (bỏ qua khi đang test HLS-only)
+      if (!hlsOnlyMode) {
+        setBackupState({
+          backupUrl: "",
+          isLoadingBackup: false,
+          backupError: false,
+          backupVideoReady: false,
+          youtubeError: false,
+        });
+      }
+
+      if (hlsOnlyMode) return;
 
       if (playerRef.current?.loadVideoById) {
         // Thêm mới: Đảm bảo player không bị mute trước khi load video mới
@@ -483,6 +494,7 @@ export function useVideoEvents({
 
   // Set up time update interval ổn định, đủ thưa để không spam postMessage vào iframe.
   useEffect(() => {
+    if (hlsOnlyMode) return;
     const socket = socketRef.current;
     if (!socket) return;
 
@@ -491,7 +503,7 @@ export function useVideoEvents({
     }, TIME_UPDATE_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
-  }, [handleTimeUpdate]);
+  }, [handleTimeUpdate, hlsOnlyMode]);
 
   useEffect(() => {
     lastTimeRef.current = { currentTime: 0, isPlaying: false };

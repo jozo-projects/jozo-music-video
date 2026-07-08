@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { BackupState, BackupVideoProps, VideoEvent } from "../types";
 import React from "react";
+import { isHlsUrl, resolveHlsUrl } from "../../../utils/hls";
 
 /**
  * Return type for useBackupVideo hook
@@ -27,15 +28,17 @@ export function useBackupVideo({
   socket,
   onVideoReady,
   onVideoEnd,
+  preserveBackupOnVideoChange = false,
+  initialBackupUrl = "",
 }: BackupVideoProps): UseBackupVideoReturn {
   const backupVideoRef = useRef<HTMLVideoElement>(null);
-  const [backupState, setBackupState] = useState<BackupState>({
-    backupUrl: "",
+  const [backupState, setBackupState] = useState<BackupState>(() => ({
+    backupUrl: initialBackupUrl,
     isLoadingBackup: false,
     backupError: false,
     backupVideoReady: false,
-    youtubeError: false,
-  });
+    youtubeError: !!initialBackupUrl,
+  }));
 
   // Store latest props in refs
   const videoIdRef = useRef(videoId);
@@ -44,6 +47,7 @@ export function useBackupVideo({
   const apiCallCountRef = useRef<number>(0);
   // Thêm một ref để theo dõi trạng thái hiện tại của backupState
   const backupStateRef = useRef(backupState);
+  const videoReadyFiredForUrlRef = useRef("");
 
   // Cập nhật ref khi backupState thay đổi
   useEffect(() => {
@@ -124,6 +128,19 @@ export function useBackupVideo({
         backupError: false,
         youtubeError: true,
       }));
+
+      // Ưu tiên HLS từ local server nếu đã cấu hình
+      const hlsUrl = await resolveHlsUrl(currentVideoId);
+      if (hlsUrl) {
+        console.log("===> Using HLS backup URL:", hlsUrl, " <===");
+        setBackupState((prev) => ({
+          ...prev,
+          backupUrl: hlsUrl,
+          isLoadingBackup: false,
+          youtubeError: true,
+        }));
+        return;
+      }
 
       // Xóa timeout cũ nếu có
       const timeout = 20000; // Tăng timeout để đủ thời gian cho API phản hồi
@@ -216,16 +233,17 @@ export function useBackupVideo({
 
   // Reset state when videoId changes
   useEffect(() => {
-    if (videoId) {
-      setBackupState({
-        backupUrl: "",
-        isLoadingBackup: false,
-        backupError: false,
-        backupVideoReady: false,
-        youtubeError: false,
-      });
-    }
-  }, [videoId]);
+    if (!videoId || preserveBackupOnVideoChange) return;
+
+    videoReadyFiredForUrlRef.current = "";
+    setBackupState({
+      backupUrl: "",
+      isLoadingBackup: false,
+      backupError: false,
+      backupVideoReady: false,
+      youtubeError: false,
+    });
+  }, [videoId, preserveBackupOnVideoChange]);
 
   // Handle playback events for backup video
   const handlePlaybackEvent = useCallback(
@@ -252,11 +270,20 @@ export function useBackupVideo({
 
   // Handler for when backup video is loaded
   const handleVideoLoaded = useCallback(() => {
+    const currentUrl = backupStateRef.current.backupUrl;
+    if (!currentUrl) return;
+
+    // Chỉ xử lý ready một lần cho mỗi URL — tránh loop khi HLS fire nhiều event.
+    if (videoReadyFiredForUrlRef.current === currentUrl) {
+      return;
+    }
+    videoReadyFiredForUrlRef.current = currentUrl;
+
     console.log("Backup video ready");
 
-    // Lấy giá trị videoId và roomId mới nhất
     const currentVideoId = videoIdRef.current;
     const currentRoomId = roomIdRef.current;
+    const isHls = isHlsUrl(currentUrl);
 
     setBackupState((prev) => ({
       ...prev,
@@ -264,75 +291,34 @@ export function useBackupVideo({
       isLoadingBackup: false,
     }));
 
-    // Chỉ tắt tiếng YouTube khi backup video đã thực sự sẵn sàng
     if (backupVideoRef.current) {
       try {
-        // Đảm bảo backup video có âm thanh trước khi tắt tiếng YouTube player
         backupVideoRef.current.volume = volume / 100;
         backupVideoRef.current.muted = false;
-
-        console.log(
-          "Backup video audio settings: volume =",
-          volume / 100,
-          "muted =",
-          false
-        );
       } catch (e) {
         console.error("Error setting backup audio:", e);
       }
     }
 
-    // Sử dụng giá trị mới nhất cho socket event
-    socket?.emit("video_ready", {
-      roomId: currentRoomId,
-      videoId: currentVideoId,
-    });
+    if (currentRoomId && currentVideoId) {
+      socket?.emit("video_ready", {
+        roomId: currentRoomId,
+        videoId: currentVideoId,
+      });
+    }
 
-    // Thêm delay nhỏ để đảm bảo video dự phòng có thể bắt đầu mà không bị xung đột
     setTimeout(() => {
       onVideoReady();
 
-      // Auto play backup video and hide YouTube player
-      if (backupVideoRef.current) {
-        console.log(
-          "Starting playback of backup video with delay to prevent conflicts"
-        );
+      // HlsVideo tự play sau MANIFEST_PARSED — không gọi play() thêm để tránh interrupt.
+      if (isHls || !backupVideoRef.current) return;
 
-        // Đảm bảo volume được thiết lập trước khi phát
-        backupVideoRef.current.volume = volume / 100;
-
-        // Đảm bảo video không bị tắt tiếng
-        backupVideoRef.current.muted = false;
-
-        backupVideoRef.current
-          .play()
-          .then(() => {
-            console.log("Backup video playing successfully");
-          })
-          .catch((error) => {
-            console.error("Error auto-playing backup video:", error);
-            // Thử phát lần nữa sau khi người dùng tương tác
-            document.addEventListener(
-              "click",
-              () => {
-                if (backupVideoRef.current) {
-                  backupVideoRef.current.volume = volume / 100;
-                  backupVideoRef.current.muted = false;
-                  backupVideoRef.current
-                    .play()
-                    .catch((e) =>
-                      console.error(
-                        "Still couldn't play after user interaction:",
-                        e
-                      )
-                    );
-                }
-              },
-              { once: true }
-            );
-          });
-      }
-    }, 100); // Giảm delay xuống 100ms để bắt đầu phát nhanh hơn
+      backupVideoRef.current.volume = volume / 100;
+      backupVideoRef.current.muted = false;
+      backupVideoRef.current.play().catch((error) => {
+        console.error("Error auto-playing backup video:", error);
+      });
+    }, 100);
   }, [socket, onVideoReady, volume]);
 
   // Handler for backup video error
@@ -340,16 +326,19 @@ export function useBackupVideo({
     (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
       console.error("Error playing backup video:", e);
 
-      // Không hiển thị lỗi, chỉ đơn giản là đặt lại trạng thái
+      const currentUrl = backupStateRef.current.backupUrl;
+      // HLS: không xóa URL — xóa URL sẽ kích hoạt retry loop với youtubeError vẫn true.
+      if (isHlsUrl(currentUrl)) {
+        return;
+      }
+
+      videoReadyFiredForUrlRef.current = "";
       setBackupState((prev) => ({
         ...prev,
-        backupUrl: "", // Xóa URL để có thể thử lại nếu cần
+        backupUrl: "",
         backupVideoReady: false,
-        isLoadingBackup: false, // Đảm bảo trạng thái loading đã tắt
+        isLoadingBackup: false,
       }));
-
-      // Có thể thử tải lại video YouTube nếu backup có lỗi
-      // Hoặc âm thầm thông báo cho server về vấn đề
     },
     []
   );

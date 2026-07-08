@@ -23,6 +23,8 @@ import {
 } from "./UIOverlays";
 import WelcomeScreen from "./WelcomeScreen";
 import YouTubePlayerIframe from "./YouTubePlayerIframe";
+import HlsVideo from "./HlsVideo";
+import { buildHlsUrl, isHlsUrl } from "../../utils/hls";
 import { enforceFallbackQualityOnChange } from "./youtubePlaybackQuality";
 
 const IS_DEV = import.meta.env.DEV;
@@ -68,6 +70,9 @@ const VideoPlayer = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [params] = useSearchParams();
   const roomId = params.get("roomId") || "";
+  const hlsVideoId = params.get("hlsVideoId") || "";
+  const hlsStreamUrl = hlsVideoId ? buildHlsUrl(hlsVideoId) : "";
+  const isHlsOnlyMode = !!hlsVideoId;
 
   const [videoState, setVideoState] = useState<VideoState>({
     nowPlayingData: null,
@@ -148,7 +153,13 @@ const VideoPlayer = () => {
     roomId,
     volume,
     socket,
+    initialBackupUrl: hlsStreamUrl,
     onVideoReady: () => {
+      if (isHlsOnlyMode) {
+        setVideoState((prev) => ({ ...prev, isPaused: false }));
+        return;
+      }
+
       if (playerRef.current) {
         try {
           playerRef.current.mute?.();
@@ -170,11 +181,32 @@ const VideoPlayer = () => {
       }
     },
     onVideoEnd: handleBackupVideoEnd,
+    preserveBackupOnVideoChange: isHlsOnlyMode,
   });
+
+  useEffect(() => {
+    if (!hlsVideoId) return;
+    if (!hlsStreamUrl) {
+      devError("hlsVideoId không hợp lệ hoặc VITE_API_LOCAL_SERVER chưa cấu hình");
+      return;
+    }
+    devLog("HLS stream:", hlsStreamUrl);
+    setBackupState({
+      backupUrl: hlsStreamUrl,
+      isLoadingBackup: false,
+      backupError: false,
+      backupVideoReady: false,
+      youtubeError: true,
+    });
+  }, [hlsVideoId, hlsStreamUrl, setBackupState]);
+
+  const activeHlsUrl = isHlsOnlyMode ? hlsStreamUrl : backupState.backupUrl;
 
   // Khi vào phòng: GET now-playing để đồng bộ bài + play/pause với server.
   useEffect(() => {
     if (!roomId) return;
+    // HLS mode: giữ backupUrl, tránh xóa rồi mount lại HlsVideo liên tục.
+    if (isHlsOnlyMode) return;
     let cancelled = false;
 
     (async () => {
@@ -230,7 +262,7 @@ const VideoPlayer = () => {
     return () => {
       cancelled = true;
     };
-  }, [roomId, setBackupState]);
+  }, [roomId, isHlsOnlyMode, setBackupState]);
 
   const { handleVideoEnd } = useVideoEvents({
     socket,
@@ -243,6 +275,7 @@ const VideoPlayer = () => {
     handleBackupVideoEnd,
     backupState,
     setBackupState,
+    hlsOnlyMode: isHlsOnlyMode,
   });
 
   const handleStateChange = useCallback(
@@ -606,6 +639,7 @@ const VideoPlayer = () => {
 
   // Check iframe stuck sau 8s — nếu player chưa start phát thì chuyển backup.
   useEffect(() => {
+    if (isHlsOnlyMode) return;
     if (
       !videoState.nowPlayingData?.video_id ||
       backupState.backupUrl ||
@@ -635,6 +669,7 @@ const VideoPlayer = () => {
     backupState.backupUrl,
     backupState.isLoadingBackup,
     triggerBackupVideo,
+    isHlsOnlyMode,
   ]);
 
   const handleYouTubeError = useCallback(
@@ -699,6 +734,7 @@ const VideoPlayer = () => {
 
   // Reset trạng thái lỗi YouTube sau 30s nếu backup không load được → cho phép thử lại.
   useEffect(() => {
+    if (isHlsOnlyMode) return;
     if (
       !backupState.youtubeError ||
       backupState.backupUrl ||
@@ -729,6 +765,7 @@ const VideoPlayer = () => {
     roomId,
     socket,
     setBackupState,
+    isHlsOnlyMode,
   ]);
 
   // Watchdog: nếu isLoadingBackup kẹt > 15s mà chưa có backupUrl → force reset
@@ -756,9 +793,11 @@ const VideoPlayer = () => {
   const isBackupActive = !!(
     backupState.backupUrl && backupState.backupVideoReady
   );
-  const hidePrimaryIframe = backupState.youtubeError || isBackupActive;
+  const isHlsTestMode = isHlsOnlyMode;
+  const hidePrimaryIframe = backupState.youtubeError || isBackupActive || isHlsTestMode;
   const hasActiveSong =
     !!queuedVideoId && queuedVideoId !== FALLBACK_VIDEO_ID;
+  const showWelcome = !hasActiveSong && !isHlsTestMode;
 
   const initialStartSeconds = videoState.nowPlayingData
     ? Math.max(
@@ -767,6 +806,18 @@ const VideoPlayer = () => {
           (Date.now() - videoState.nowPlayingData.timestamp) / 1000
       )
     : 0;
+
+  // Giữ reference khi YouTube iframe bị comment (chế độ ?hlsVideoId=)
+  if (isHlsOnlyMode) {
+    void youtubeEmbedVideoId;
+    void hidePrimaryIframe;
+    void initialStartSeconds;
+    void handleStateChange;
+    void handleYouTubePlayerReady;
+    void handlePlaybackQualityChange;
+    void handleYouTubeError;
+    void MemoYouTubePlayerIframe;
+  }
 
   return (
     <div
@@ -816,43 +867,54 @@ const VideoPlayer = () => {
         </div>
       )}
 
-      {/* Backup video */}
-      {backupState.backupUrl && (
+      {/* Backup / HLS — ?hlsVideoId= → VITE_API_LOCAL_SERVER (4001) */}
+      {activeHlsUrl && (
         <div
           className={`absolute inset-0 w-full h-full z-10 ${
-            isBackupActive ? "opacity-100" : "opacity-0"
+            isBackupActive || isHlsTestMode ? "opacity-100" : "opacity-0"
           }`}
         >
-          <video
-            ref={backupVideoRef}
-            key={backupState.backupUrl}
-            className="absolute inset-0 w-full h-full object-contain"
-            autoPlay
-            playsInline
-            controls={false}
-            disablePictureInPicture
-            controlsList="nodownload noplaybackrate nofullscreen"
-            onLoadedData={onBackupVideoLoaded}
-            onEnded={onVideoEnd}
-            onError={handleVideoError}
-            preload="auto"
-            muted={volume === 0}
-            style={{
-              objectFit: "contain",
-              width: "100%",
-              height: "100%",
-              backgroundColor: "#000",
-            }}
-          >
-            <source src={backupState.backupUrl} type="video/mp4" />
-            <source src={backupState.backupUrl} type="video/webm" />
-            <source src={backupState.backupUrl} type="video/ogg" />
-          </video>
+          {isHlsUrl(activeHlsUrl) ? (
+            <HlsVideo
+              ref={backupVideoRef}
+              url={activeHlsUrl}
+              volume={volume}
+              onLoadedData={onBackupVideoLoaded}
+              onEnded={onVideoEnd}
+              onError={handleVideoError}
+            />
+          ) : (
+            <video
+              ref={backupVideoRef}
+              key={backupState.backupUrl}
+              className="absolute inset-0 w-full h-full object-contain"
+              autoPlay
+              playsInline
+              controls={false}
+              disablePictureInPicture
+              controlsList="nodownload noplaybackrate nofullscreen"
+              onLoadedData={onBackupVideoLoaded}
+              onEnded={onVideoEnd}
+              onError={handleVideoError}
+              preload="auto"
+              muted={volume === 0}
+              style={{
+                objectFit: "contain",
+                width: "100%",
+                height: "100%",
+                backgroundColor: "#000",
+              }}
+            >
+              <source src={backupState.backupUrl} type="video/mp4" />
+              <source src={backupState.backupUrl} type="video/webm" />
+              <source src={backupState.backupUrl} type="video/ogg" />
+            </video>
+          )}
         </div>
       )}
 
-      {/* YouTube: bài trong queue hoặc nhạc chờ (FALLBACK) — Welcome che khi queue trống. */}
-      {!!youtubeEmbedVideoId && (
+      {/* YouTube iframe — tạm tắt, chỉ phát HLS
+      {!!youtubeEmbedVideoId && !isHlsTestMode && (
         <div
           className={`absolute top-0 left-0 w-full h-full z-[5] ${
             hidePrimaryIframe ? "opacity-0 pointer-events-none" : "opacity-100"
@@ -870,6 +932,7 @@ const VideoPlayer = () => {
           />
         </div>
       )}
+      */}
 
       {backupState.youtubeError && !backupState.backupVideoReady && (
         <div className="absolute inset-0 bg-black z-40" />
@@ -888,7 +951,7 @@ const VideoPlayer = () => {
       )}
 
       {/* Welcome screen khi không có bài. */}
-      {!hasActiveSong && <WelcomeScreen currentMessageIndex={currentMessageIndex} />}
+      {showWelcome && <WelcomeScreen currentMessageIndex={currentMessageIndex} />}
 
       {videoState.nowPlayingData && showTitle && hasActiveSong && (
         <div className="absolute top-4 left-4 z-50 bg-black p-4 rounded-lg text-white">
@@ -899,7 +962,7 @@ const VideoPlayer = () => {
 
       <VolumeToastComponent volumeToast={volumeToast} />
 
-      <PoweredByBadge show={showPoweredBy || !hasActiveSong} />
+      <PoweredByBadge show={showPoweredBy || showWelcome} />
 
       {backupState.youtubeError &&
         !backupState.backupVideoReady &&
