@@ -1,10 +1,12 @@
 import { useEffect, useState, useRef } from "react";
 import io from "socket.io-client";
+import { getDeviceId } from "@/utils/deviceId";
 import { SocketStatus, VideoTurnedOffData } from "../types";
 
 // Tạo một global socket để tránh nhiều kết nối mới
 type SocketInstance = ReturnType<typeof io>;
 let globalSocket: SocketInstance | null = null;
+let globalSocketRoomId: string | null = null;
 
 interface UseSocketConnectionProps {
   roomId: string;
@@ -43,13 +45,21 @@ export function useSocketConnection({
   }, [onConnect, onVideosOff, onVideosOn]);
 
   useEffect(() => {
+    if (!roomId) {
+      return;
+    }
+
     // Nếu đang kết nối, bỏ qua
     if (connectingRef.current) {
       return;
     }
 
-    // Sử dụng socket toàn cục nếu đã tồn tại và kết nối
-    if (globalSocket && globalSocket.connected) {
+    // Sử dụng socket toàn cục nếu đã tồn tại, kết nối, và cùng roomId
+    if (
+      globalSocket &&
+      globalSocket.connected &&
+      globalSocketRoomId === roomId
+    ) {
       console.log("Sử dụng kết nối socket hiện có");
       setSocket((prev) => (prev === globalSocket ? prev : globalSocket));
       setSocketStatus((prev) => {
@@ -60,10 +70,7 @@ export function useSocketConnection({
         };
       });
 
-      // Gửi roomId
-      if (roomId) {
-        globalSocket.emit("request_current_song", { roomId });
-      }
+      globalSocket.emit("request_current_song", { roomId });
 
       return;
     }
@@ -71,10 +78,11 @@ export function useSocketConnection({
     // Đánh dấu đang kết nối
     connectingRef.current = true;
 
-    // Xóa socket cũ nếu không còn kết nối
-    if (globalSocket && !globalSocket.connected) {
+    // Xóa socket cũ nếu không còn kết nối hoặc đổi roomId (query chỉ gửi lúc handshake)
+    if (globalSocket) {
       globalSocket.disconnect();
       globalSocket = null;
+      globalSocketRoomId = null;
     }
 
     console.log(
@@ -85,7 +93,11 @@ export function useSocketConnection({
 
     // Tạo kết nối socket mới
     const socketInstance = io(import.meta.env.VITE_SOCKET_URL || "", {
-      query: { roomId },
+      query: {
+        roomId,
+        deviceId: getDeviceId(),
+        clientType: "video",
+      },
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
@@ -93,11 +105,12 @@ export function useSocketConnection({
       timeout: 10000, // Giảm timeout để kết nối nhanh hơn
       transports: ["websocket", "polling"],
       path: "/socket.io",
-      forceNew: !globalSocket,
+      forceNew: true,
     });
 
     // Lưu vào biến toàn cục
     globalSocket = socketInstance;
+    globalSocketRoomId = roomId;
     setSocket(socketInstance);
 
     // Xử lý kết nối thành công
