@@ -24,14 +24,7 @@ import {
 import WelcomeScreen from "./WelcomeScreen";
 import YouTubePlayerIframe from "./YouTubePlayerIframe";
 import { enforceFallbackQualityOnChange } from "./youtubePlaybackQuality";
-
-const IS_DEV = import.meta.env.DEV;
-const devLog = (...args: unknown[]) => {
-  if (IS_DEV) console.log(...args);
-};
-const devError = (...args: unknown[]) => {
-  if (IS_DEV) console.error(...args);
-};
+import { IS_DEV, devError } from "@/utils/devLog";
 
 interface YouTubePlayerEvent {
   data: number;
@@ -925,6 +918,3 @@ const VideoPlayer = () => {
 };
 
 export default memo(VideoPlayer);
-
-// Dùng devLog tạm để tránh lint unused-var khi IS_DEV=false.
-void devLog;

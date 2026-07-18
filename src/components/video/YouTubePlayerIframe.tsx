@@ -6,17 +6,10 @@ import {
   enforcePreferredQualityOnChange,
 } from "./youtubePlaybackQuality";
 import { resolveLowPowerMode } from "./deviceCapability";
+import { devError, devLog } from "@/utils/devLog";
 
 // Detect 1 lần khi module load, cố định trong suốt phiên.
 const IS_LOW_POWER = resolveLowPowerMode();
-const IS_DEV = import.meta.env.DEV;
-
-const devLog = (...args: unknown[]) => {
-  if (IS_DEV) console.log(...args);
-};
-const devError = (...args: unknown[]) => {
-  if (IS_DEV) console.error(...args);
-};
 
 // ID ổn định cho placeholder div — YT.Player sẽ replace element này thành <iframe>.
 const PLAYER_ELEMENT_ID = "youtube-player";

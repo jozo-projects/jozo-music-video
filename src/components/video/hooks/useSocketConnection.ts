@@ -1,10 +1,13 @@
 import { useEffect, useState, useRef } from "react";
 import io from "socket.io-client";
+import { getDeviceId } from "@/utils/deviceId";
+import { devError, devLog } from "@/utils/devLog";
 import { SocketStatus, VideoTurnedOffData } from "../types";
 
 // Tạo một global socket để tránh nhiều kết nối mới
 type SocketInstance = ReturnType<typeof io>;
 let globalSocket: SocketInstance | null = null;
+let globalSocketRoomId: string | null = null;
 
 interface UseSocketConnectionProps {
   roomId: string;
@@ -43,14 +46,22 @@ export function useSocketConnection({
   }, [onConnect, onVideosOff, onVideosOn]);
 
   useEffect(() => {
+    if (!roomId) {
+      return;
+    }
+
     // Nếu đang kết nối, bỏ qua
     if (connectingRef.current) {
       return;
     }
 
-    // Sử dụng socket toàn cục nếu đã tồn tại và kết nối
-    if (globalSocket && globalSocket.connected) {
-      console.log("Sử dụng kết nối socket hiện có");
+    // Sử dụng socket toàn cục nếu đã tồn tại, kết nối, và cùng roomId
+    if (
+      globalSocket &&
+      globalSocket.connected &&
+      globalSocketRoomId === roomId
+    ) {
+      devLog("Sử dụng kết nối socket hiện có");
       setSocket((prev) => (prev === globalSocket ? prev : globalSocket));
       setSocketStatus((prev) => {
         if (prev.connected && prev.connectionAttempts === 0) return prev;
@@ -60,10 +71,7 @@ export function useSocketConnection({
         };
       });
 
-      // Gửi roomId
-      if (roomId) {
-        globalSocket.emit("request_current_song", { roomId });
-      }
+      globalSocket.emit("request_current_song", { roomId });
 
       return;
     }
@@ -71,13 +79,14 @@ export function useSocketConnection({
     // Đánh dấu đang kết nối
     connectingRef.current = true;
 
-    // Xóa socket cũ nếu không còn kết nối
-    if (globalSocket && !globalSocket.connected) {
+    // Xóa socket cũ nếu không còn kết nối hoặc đổi roomId (query chỉ gửi lúc handshake)
+    if (globalSocket) {
       globalSocket.disconnect();
       globalSocket = null;
+      globalSocketRoomId = null;
     }
 
-    console.log(
+    devLog(
       `Kết nối tới socket server: ${
         import.meta.env.VITE_SOCKET_URL || "URL mặc định"
       }`
@@ -85,7 +94,11 @@ export function useSocketConnection({
 
     // Tạo kết nối socket mới
     const socketInstance = io(import.meta.env.VITE_SOCKET_URL || "", {
-      query: { roomId },
+      query: {
+        roomId,
+        deviceId: getDeviceId(),
+        clientType: "video",
+      },
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
@@ -93,16 +106,17 @@ export function useSocketConnection({
       timeout: 10000, // Giảm timeout để kết nối nhanh hơn
       transports: ["websocket", "polling"],
       path: "/socket.io",
-      forceNew: !globalSocket,
+      forceNew: true,
     });
 
     // Lưu vào biến toàn cục
     globalSocket = socketInstance;
+    globalSocketRoomId = roomId;
     setSocket(socketInstance);
 
     // Xử lý kết nối thành công
     socketInstance.on("connect", () => {
-      console.log("Socket kết nối thành công");
+      devLog("Socket kết nối thành công");
       connectingRef.current = false;
 
       setSocketStatus((prev) => {
@@ -119,13 +133,13 @@ export function useSocketConnection({
 
     // Xử lý lỗi kết nối
     socketInstance.on("connect_error", (error: Error) => {
-      console.error("Lỗi kết nối socket:", error.message);
+      devError("Lỗi kết nối socket:", error.message);
       connectingRef.current = false;
     });
 
     // Xử lý ngắt kết nối
     socketInstance.on("disconnect", () => {
-      console.log("Socket ngắt kết nối");
+      devLog("Socket ngắt kết nối");
       setSocketStatus((prev) => ({
         ...prev,
         connected: false,
@@ -134,7 +148,7 @@ export function useSocketConnection({
 
     // Xử lý thử kết nối lại
     socketInstance.on("reconnect_attempt", (attemptNumber: number) => {
-      console.log(`Thử kết nối lại #${attemptNumber}`);
+      devLog(`Thử kết nối lại #${attemptNumber}`);
 
       setSocketStatus((prev) => ({
         ...prev,
@@ -144,7 +158,7 @@ export function useSocketConnection({
 
     // Xử lý kết nối lại thành công
     socketInstance.on("reconnect", () => {
-      console.log("Socket kết nối lại thành công");
+      devLog("Socket kết nối lại thành công");
       connectingRef.current = false;
 
       setSocketStatus((prev) => ({
@@ -158,14 +172,14 @@ export function useSocketConnection({
 
     // Xử lý videos_turned_off
     socketInstance.on("videos_turned_off", (data: VideoTurnedOffData) => {
-      console.log("Videos đã bị tắt bởi backend", data);
+      devLog("Videos đã bị tắt bởi backend", data);
       setIsVideoOff(true);
       onVideosOffRef.current();
     });
 
     // Xử lý videos_turned_on
     socketInstance.on("videos_turned_on", () => {
-      console.log("Videos đã được bật bởi backend");
+      devLog("Videos đã được bật bởi backend");
       setIsVideoOff(false);
       onVideosOnRef.current();
     });
