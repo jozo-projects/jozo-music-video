@@ -9,6 +9,7 @@ import { useBackupVideo } from "./hooks/useBackupVideo";
 import { useSocketConnection } from "./hooks/useSocketConnection";
 import { useVideoEvents } from "./hooks/useVideoEvents";
 import PauseOverlay from "./PauseOverlay";
+import RoomSelectModal from "./RoomSelectModal";
 import {
   BackupState,
   VideoState,
@@ -78,6 +79,24 @@ const VideoPlayer = () => {
     value: 100,
   });
   const [showPoweredBy, setShowPoweredBy] = useState(true);
+  const [showRoomModal, setShowRoomModal] = useState(false);
+
+  const openRoomModal = useCallback(() => setShowRoomModal(true), []);
+  const closeRoomModal = useCallback(() => setShowRoomModal(false), []);
+
+  const handleSelectRoom = useCallback(
+    (selectedRoomId: number) => {
+      if (String(selectedRoomId) === roomId) {
+        setShowRoomModal(false);
+        return;
+      }
+
+      const next = new URLSearchParams(params);
+      next.set("roomId", String(selectedRoomId));
+      window.location.assign(`${window.location.pathname}?${next.toString()}`);
+    },
+    [params, roomId]
+  );
 
   /** Sau GET now-playing: nếu server báo pause, chặn một lần PLAYING để pause và không emit play lên socket. */
   const hydratePauseAfterPlayRef = useRef(false);
@@ -859,9 +878,14 @@ const VideoPlayer = () => {
         <div className="absolute inset-0 bg-black z-40" />
       )}
 
-      <div className="absolute z-30 top-[15px] right-[15px] w-[140px] h-[50px] bg-black">
+      <button
+        type="button"
+        onClick={openRoomModal}
+        className="absolute z-30 top-[15px] right-[15px] w-[140px] h-[50px] bg-black cursor-pointer"
+        aria-label="Chọn phòng Jozo"
+      >
         <img src={logo} alt="logo" className="w-full h-full" />
-      </div>
+      </button>
 
       {/* Pause overlay — bg đen mờ thuần, KHÔNG dùng backdrop-blur. */}
       {videoState.isPaused && hasActiveSong && videoState.nowPlayingData && (
@@ -883,7 +907,10 @@ const VideoPlayer = () => {
 
       <VolumeToastComponent volumeToast={volumeToast} />
 
-      <PoweredByBadge show={showPoweredBy || !hasActiveSong} />
+      <PoweredByBadge
+        show={showPoweredBy || !hasActiveSong}
+        onClick={openRoomModal}
+      />
 
       {backupState.youtubeError &&
         !backupState.backupVideoReady &&
@@ -913,6 +940,13 @@ const VideoPlayer = () => {
             </p>
           </div>
         )}
+
+      <RoomSelectModal
+        open={showRoomModal}
+        currentRoomId={roomId}
+        onSelect={handleSelectRoom}
+        onClose={closeRoomModal}
+      />
     </div>
   );
 };

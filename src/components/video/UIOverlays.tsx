@@ -77,20 +77,28 @@ export const VolumeToastComponent: React.FC<VolumeToastComponentProps> = ({
 
 interface PoweredByBadgeProps {
   show: boolean;
+  onClick?: () => void;
 }
 
-export const PoweredByBadge: React.FC<PoweredByBadgeProps> = ({ show }) => {
+export const PoweredByBadge: React.FC<PoweredByBadgeProps> = ({
+  show,
+  onClick,
+}) => {
   if (!show) return null;
 
   return (
     <div className="absolute bottom-3 right-3 z-50">
-      <div className="bg-black/75 px-3 py-1.5 rounded-lg shadow-lg border border-blue-500/30 flex items-center">
+      <button
+        type="button"
+        onClick={onClick}
+        className="bg-black/75 px-3 py-1.5 rounded-lg shadow-lg border border-blue-500/30 flex items-center cursor-pointer hover:border-blue-400/60"
+      >
         <span className="text-white text-sm font-medium mr-1">Powered by</span>
         <span className="text-gradient bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-cyan-500 font-bold text-sm">
           Jozo
         </span>
         <div className="h-2 w-2 rounded-full bg-blue-500 ml-1.5"></div>
-      </div>
+      </button>
     </div>
   );
 };
