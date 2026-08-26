@@ -231,18 +231,46 @@ export function useBackupVideo({
     }
   }, [volume]);
 
-  // Reset state when videoId changes
+  // Probe the local worker whenever the song changes. YouTube remains the
+  // normal primary player when the worker has no ready HLS copy.
   useEffect(() => {
     if (!videoId || preserveBackupOnVideoChange) return;
 
     videoReadyFiredForUrlRef.current = "";
     setBackupState({
       backupUrl: "",
-      isLoadingBackup: false,
+      isLoadingBackup: true,
       backupError: false,
       backupVideoReady: false,
-      youtubeError: false,
+      youtubeError: true,
     });
+
+    let cancelled = false;
+    void resolveHlsUrl(videoId).then((hlsUrl) => {
+      if (cancelled) return;
+
+      if (hlsUrl) {
+        setBackupState((prev) => ({
+          ...prev,
+          backupUrl: hlsUrl,
+          isLoadingBackup: false,
+          youtubeError: true,
+        }));
+        return;
+      }
+
+      // No local copy (or local worker unavailable): use YouTube normally.
+      setBackupState((prev) => ({
+        ...prev,
+        backupUrl: "",
+        isLoadingBackup: false,
+        youtubeError: false,
+      }));
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [videoId, preserveBackupOnVideoChange]);
 
   // Handle playback events for backup video
@@ -327,8 +355,17 @@ export function useBackupVideo({
       console.error("Error playing backup video:", e);
 
       const currentUrl = backupStateRef.current.backupUrl;
-      // HLS: không xóa URL — xóa URL sẽ kích hoạt retry loop với youtubeError vẫn true.
+      // Local HLS failed: fall back to the already-mounted YouTube iframe.
       if (isHlsUrl(currentUrl)) {
+        videoReadyFiredForUrlRef.current = "";
+        setBackupState((prev) => ({
+          ...prev,
+          backupUrl: "",
+          backupVideoReady: false,
+          isLoadingBackup: false,
+          youtubeError: false,
+          backupError: true,
+        }));
         return;
       }
 

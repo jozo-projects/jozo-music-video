@@ -716,6 +716,46 @@ const VideoPlayer = () => {
     }
   }, [backupState.backupUrl, backupState.backupVideoReady]);
 
+  // If a local HLS copy exists but cannot be played, resume the YouTube
+  // primary player instead of leaving the screen black.
+  useEffect(() => {
+    if (
+      isHlsOnlyMode ||
+      !backupState.backupError ||
+      backupState.backupUrl ||
+      !queuedVideoId ||
+      !playerRef.current
+    ) {
+      return;
+    }
+
+    try {
+      playerRef.current.loadVideoById({
+        videoId: queuedVideoId,
+        startSeconds: videoState.nowPlayingData
+          ? Math.max(
+              0,
+              videoState.nowPlayingData.currentTime +
+                (Date.now() - videoState.nowPlayingData.timestamp) / 1000
+            )
+          : 0,
+      });
+      playerRef.current.unMute?.();
+      playerRef.current.setVolume?.(volume);
+      playerRef.current.playVideo?.();
+    } catch {
+      // YouTube API may still be initializing; its normal ready callback will
+      // start the video once the iframe is ready.
+    }
+  }, [
+    backupState.backupError,
+    backupState.backupUrl,
+    queuedVideoId,
+    volume,
+    isHlsOnlyMode,
+    videoState.nowPlayingData,
+  ]);
+
   const handlePlaySong = useCallback((data: any) => {
     if (data?.video_id) {
       currentVideoRef.current = data.video_id;
@@ -790,11 +830,7 @@ const VideoPlayer = () => {
     return <RecordingStudio />;
   }
 
-  const isBackupActive = !!(
-    backupState.backupUrl && backupState.backupVideoReady
-  );
   const isHlsTestMode = isHlsOnlyMode;
-  const hidePrimaryIframe = backupState.youtubeError || isBackupActive || isHlsTestMode;
   const hasActiveSong =
     !!queuedVideoId && queuedVideoId !== FALLBACK_VIDEO_ID;
   const showWelcome = !hasActiveSong && !isHlsTestMode;
@@ -807,10 +843,9 @@ const VideoPlayer = () => {
       )
     : 0;
 
-  // Giữ reference khi YouTube iframe bị comment (chế độ ?hlsVideoId=)
+  // Keep non-rendered values referenced in HLS-only mode.
   if (isHlsOnlyMode) {
     void youtubeEmbedVideoId;
-    void hidePrimaryIframe;
     void initialStartSeconds;
     void handleStateChange;
     void handleYouTubePlayerReady;
@@ -867,13 +902,8 @@ const VideoPlayer = () => {
         </div>
       )}
 
-      {/* Backup / HLS — ?hlsVideoId= → VITE_API_LOCAL_SERVER (4001) */}
       {activeHlsUrl && (
-        <div
-          className={`absolute inset-0 w-full h-full z-10 ${
-            isBackupActive || isHlsTestMode ? "opacity-100" : "opacity-0"
-          }`}
-        >
+        <div className="absolute inset-0 w-full h-full z-10 opacity-100">
           {isHlsUrl(activeHlsUrl) ? (
             <HlsVideo
               ref={backupVideoRef}
@@ -913,26 +943,24 @@ const VideoPlayer = () => {
         </div>
       )}
 
-      {/* YouTube iframe — tạm tắt, chỉ phát HLS
-      {!!youtubeEmbedVideoId && !isHlsTestMode && (
-        <div
-          className={`absolute top-0 left-0 w-full h-full z-[5] ${
-            hidePrimaryIframe ? "opacity-0 pointer-events-none" : "opacity-100"
-          }`}
-        >
-          <MemoYouTubePlayerIframe
-            playerRef={playerRef}
-            videoId={youtubeEmbedVideoId}
-            isFallback={!videoState.nowPlayingData}
-            startSeconds={initialStartSeconds}
-            onReady={handleYouTubePlayerReady}
-            onStateChange={handleStateChange}
-            onError={handleYouTubeError}
-            onPlaybackQualityChange={handlePlaybackQualityChange}
-          />
-        </div>
-      )}
-      */}
+      {/* Exactly one primary player is mounted at a time. */}
+      {!!youtubeEmbedVideoId &&
+        !activeHlsUrl &&
+        !isHlsTestMode &&
+        !backupState.isLoadingBackup && (
+          <div className="absolute top-0 left-0 w-full h-full z-[5]">
+            <MemoYouTubePlayerIframe
+              playerRef={playerRef}
+              videoId={youtubeEmbedVideoId}
+              isFallback={!videoState.nowPlayingData}
+              startSeconds={initialStartSeconds}
+              onReady={handleYouTubePlayerReady}
+              onStateChange={handleStateChange}
+              onError={handleYouTubeError}
+              onPlaybackQualityChange={handlePlaybackQualityChange}
+            />
+          </div>
+        )}
 
       {backupState.youtubeError && !backupState.backupVideoReady && (
         <div className="absolute inset-0 bg-black z-40" />
