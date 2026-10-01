@@ -3,7 +3,7 @@ import welcomeBackground from "../../assets/member-poster-final.png";
 
 const WelcomeScreen: React.FC = () => {
   return (
-    <div className="absolute inset-0 z-[30] flex flex-col bg-black overflow-hidden">
+    <div className="absolute inset-0 z-[20] flex flex-col bg-black overflow-hidden">
       {/* Nền blur scale — kiểu YouTube/Facebook letterbox */}
       <div className="absolute inset-0 scale-110" aria-hidden>
         <img

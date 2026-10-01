@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { PlaySongEvent, VideoEvent, VideoState } from "../types";
+import { FALLBACK_VIDEO_ID } from "../constants";
 import { devError, devLog } from "@/utils/devLog";
 
 const TIME_UPDATE_INTERVAL_MS = 2500;
@@ -281,13 +282,42 @@ export function useVideoEvents({
       }
     };
 
-    // Handle now_playing_cleared event
+    // Hàng đợi trống: bỏ bài vừa hết, tắt backup/loading để poster không bị che,
+    // rồi phát nhạc chờ.
     const handleNowPlayingCleared = () => {
+      setIsChangingSong(false);
       setVideoState((prev) => ({
         ...prev,
         nowPlayingData: null,
         currentVideoId: "",
+        isPaused: false,
+        isBuffering: false,
       }));
+      setBackupState({
+        backupUrl: "",
+        isLoadingBackup: false,
+        backupError: false,
+        backupVideoReady: false,
+        youtubeError: false,
+      });
+
+      const player = playerRef.current;
+      if (!player?.loadVideoById) return;
+      try {
+        player.unMute?.();
+        const currentId = player.getVideoData?.()?.video_id;
+        if (currentId === FALLBACK_VIDEO_ID) {
+          player.playVideo();
+          return;
+        }
+        player.loadVideoById({
+          videoId: FALLBACK_VIDEO_ID,
+          startSeconds: 0,
+        });
+        player.playVideo();
+      } catch (e) {
+        devError("Error starting waiting music:", e);
+      }
     };
 
     // Register event listeners

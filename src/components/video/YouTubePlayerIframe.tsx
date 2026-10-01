@@ -106,6 +106,9 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   const [apiReady, setApiReady] = useState(apiLoaded);
   const playerInstanceRef = useRef<any>(null);
   const initializingRef = useRef(false);
+  const playerReadyRef = useRef(false);
+  const videoIdRef = useRef(videoId);
+  videoIdRef.current = videoId;
 
   // Ref-hoá callback để effect init không phụ thuộc vào hàm parent.
   const onReadyRef = useRef(onReady);
@@ -176,8 +179,17 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         },
         events: {
           onReady: (event: any) => {
+            playerReadyRef.current = true;
             try {
               const target = event.target;
+              const wanted = videoIdRef.current;
+              const current = target.getVideoData?.()?.video_id;
+              if (wanted && current && current !== wanted) {
+                target.loadVideoById({
+                  videoId: wanted,
+                  startSeconds: startSecondsRef.current ?? 0,
+                });
+              }
               disableCaptions(target);
 
               applyInitialPlaybackQuality(
@@ -232,6 +244,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   // Chỉ phụ thuộc videoId — startSeconds lấy từ ref (luôn mới nhất) để tránh
   // effect chạy lại mỗi render do initialStartSeconds dùng Date.now().
   useEffect(() => {
+    if (!playerReadyRef.current) return;
     const player = playerInstanceRef.current;
     if (!player || !videoId) return;
     if (typeof player.loadVideoById !== "function") return;

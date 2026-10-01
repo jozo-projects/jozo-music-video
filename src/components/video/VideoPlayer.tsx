@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { logo, waitingVideo } from "../../assets";
+import { logo } from "../../assets";
 import { RecordingStudio } from "../../RecordingStudio";
 import { FALLBACK_VIDEO_ID } from "./constants";
 import { fetchRoomNowPlaying } from "./fetchRoomNowPlaying";
@@ -22,6 +22,7 @@ import {
   PoweredByBadge,
   VolumeToastComponent,
 } from "./UIOverlays";
+import WelcomeScreen from "./WelcomeScreen";
 import YouTubePlayerIframe from "./YouTubePlayerIframe";
 import { enforceFallbackQualityOnChange } from "./youtubePlaybackQuality";
 import { IS_DEV, devError } from "@/utils/devLog";
@@ -58,7 +59,6 @@ const MemoYouTubePlayerIframe = memo(YouTubePlayerIframe);
 
 const VideoPlayer = () => {
   const playerRef = useRef<YouTubePlayerRef>(null);
-  const waitingVideoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [params] = useSearchParams();
   const roomId = params.get("roomId") || "";
@@ -153,7 +153,7 @@ const VideoPlayer = () => {
 
   // ID bài trong queue từ server (rỗng = không có bài).
   const queuedVideoId = videoState.nowPlayingData?.video_id ?? "";
-  // Khi phòng rảnh, dùng YouTube fallback chỉ để phát tiếng cho video chờ local.
+  // Khi phòng rảnh, YouTube fallback chỉ phát nhạc chờ; hình là poster thành viên.
   const youtubeEmbedVideoId = queuedVideoId || FALLBACK_VIDEO_ID;
 
   const handleBackupVideoEnd = useCallback(() => {
@@ -503,9 +503,6 @@ const VideoPlayer = () => {
     if (backupVideoRef.current) {
       backupVideoRef.current.volume = volume / 100;
     }
-    if (waitingVideoRef.current) {
-      waitingVideoRef.current.volume = volume / 100;
-    }
   }, [volume, backupVideoRef]);
 
   // Hiển thị "Powered by Jozo" đầu bài 6s.
@@ -792,8 +789,9 @@ const VideoPlayer = () => {
     backupState.backupUrl && backupState.backupVideoReady
   );
   const hasActiveSong = !!queuedVideoId;
-  // Ẩn YouTube fallback dưới video chờ local; chỉ giữ lại audio của iframe.
-  const hidePrimaryIframe = !hasActiveSong || backupState.youtubeError || isBackupActive;
+  // Poster không được che kín iframe: Chrome chặn autoplay nếu iframe bị che hoặc opacity 0.
+  // Lúc chờ, iframe nằm trên poster nhưng gần trong suốt để vẫn nghe được và vẫn thấy poster.
+  const concealYoutube = backupState.youtubeError || isBackupActive;
 
   const initialStartSeconds = videoState.nowPlayingData
     ? Math.max(
@@ -896,27 +894,17 @@ const VideoPlayer = () => {
         </div>
       )}
 
-      {/* Video chờ local khi chưa có bài trong queue. Loop để chạy liên tục. */}
-      {!hasActiveSong && (
-        <video
-          ref={waitingVideoRef}
-          className="absolute inset-0 w-full h-full object-cover z-[5] bg-black"
-          src={waitingVideo}
-          autoPlay
-          loop
-          muted={volume === 0}
-          playsInline
-          controls={false}
-          preload="auto"
-          aria-label="Video chờ Jozo"
-        />
-      )}
+      {!hasActiveSong && <WelcomeScreen />}
 
       {/* YouTube: bài trong queue. */}
       {!!youtubeEmbedVideoId && (
         <div
-          className={`absolute top-0 left-0 w-full h-full z-[5] ${
-            hidePrimaryIframe ? "opacity-0 pointer-events-none" : "opacity-100"
+          className={`absolute top-0 left-0 h-full w-full ${
+            concealYoutube
+              ? "z-[5] opacity-0 pointer-events-none"
+              : !hasActiveSong
+                ? "z-[21] opacity-[0.03] pointer-events-none"
+                : "z-[5] opacity-100"
           }`}
         >
           <MemoYouTubePlayerIframe
@@ -939,7 +927,7 @@ const VideoPlayer = () => {
       <button
         type="button"
         onClick={openRoomModal}
-        className="absolute z-30 top-[15px] right-[15px] w-[140px] h-[50px] bg-black cursor-pointer"
+        className="absolute z-30 top-[15px] right-[15px] w-[140px] h-[50px] cursor-pointer"
         aria-label="Chọn phòng Jozo"
       >
         <img src={logo} alt="logo" className="w-full h-full" />
@@ -953,8 +941,6 @@ const VideoPlayer = () => {
         </>
       )}
 
-      {/* Video chờ local đã thay thế welcome screen khi chưa có bài. */}
-
       {videoState.nowPlayingData && showTitle && hasActiveSong && (
         <div className="absolute top-4 left-4 z-50 bg-black p-4 rounded-lg text-white">
           <p className="font-bold">{videoState.nowPlayingData.title}</p>
@@ -965,7 +951,7 @@ const VideoPlayer = () => {
       <VolumeToastComponent volumeToast={volumeToast} />
 
       <PoweredByBadge
-        show={showPoweredBy || !hasActiveSong}
+        show={showPoweredBy && hasActiveSong}
         onClick={openRoomModal}
       />
 
