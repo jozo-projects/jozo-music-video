@@ -3,6 +3,10 @@ export function getLocalServerUrl(): string {
 }
 
 export function buildHlsUrl(videoId: string): string {
+  if (/^https?:\/\/.+\.m3u8(?:\?.*)?$/i.test(videoId)) {
+    return videoId;
+  }
+
   const base = getLocalServerUrl();
   if (!base || !videoId) return "";
   // Test mode: truyền Mongo media id trực tiếp

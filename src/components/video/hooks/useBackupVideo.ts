@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { BackupState, BackupVideoProps, VideoEvent } from "../types";
 import React from "react";
+import { devError, devLog } from "@/utils/devLog";
 import { isHlsUrl, resolveHlsUrl } from "../../../utils/hls";
 
 /**
@@ -58,19 +59,19 @@ export function useBackupVideo({
   useEffect(() => {
     videoIdRef.current = videoId;
     roomIdRef.current = roomId;
-    console.log(`Updated refs - videoId: ${videoId}, roomId: ${roomId}`);
+    devLog(`Updated refs - videoId: ${videoId}, roomId: ${roomId}`);
   }, [videoId, roomId]);
 
   // Handle YouTube errors by fetching backup video
   const handleYouTubeError = useCallback(async () => {
-    console.log("===> INSIDE handleYouTubeError - HOOK FUNCTION <===");
+    devLog("===> INSIDE handleYouTubeError - HOOK FUNCTION <===");
 
     // Sử dụng backupStateRef thay vì backupState để luôn lấy giá trị mới nhất
     const currentBackupState = backupStateRef.current;
 
     // Nếu đã có backupUrl, bỏ qua hoàn toàn (tránh gọi trùng).
     if (currentBackupState.backupUrl) {
-      console.log("[SKIP] Already using backup URL, no API call needed");
+      devLog("[SKIP] Already using backup URL, no API call needed");
       return;
     }
 
@@ -81,15 +82,13 @@ export function useBackupVideo({
     const now = Date.now();
     const secondsSinceLastCall = (now - lastApiCallTimeRef.current) / 1000;
     if (secondsSinceLastCall < 5) {
-      console.log(
+      devLog(
         `[RATE LIMIT] Attempted to call API too frequently (${secondsSinceLastCall.toFixed(
-          1
-        )}s since last call)`
+          1,
+        )}s since last call)`,
       );
       setBackupState((prev) =>
-        prev.isLoadingBackup
-          ? { ...prev, isLoadingBackup: false }
-          : prev
+        prev.isLoadingBackup ? { ...prev, isLoadingBackup: false } : prev,
       );
       return;
     }
@@ -100,14 +99,14 @@ export function useBackupVideo({
 
     // Đảm bảo có videoId và roomId
     if (!currentVideoId || !currentRoomId) {
-      console.error(
-        `Missing params: videoId=${currentVideoId}, roomId=${currentRoomId}`
+      devError(
+        `Missing params: videoId=${currentVideoId}, roomId=${currentRoomId}`,
       );
       // Reset state kẹt để không treo loading vĩnh viễn.
       setBackupState((prev) =>
         prev.isLoadingBackup || prev.youtubeError
           ? { ...prev, isLoadingBackup: false, youtubeError: false }
-          : prev
+          : prev,
       );
       return;
     }
@@ -116,8 +115,8 @@ export function useBackupVideo({
     lastApiCallTimeRef.current = now;
     apiCallCountRef.current += 1;
 
-    console.log(
-      `===> Getting backup for video ID [${currentVideoId}] in room [${currentRoomId}] (call #${apiCallCountRef.current}) <===`
+    devLog(
+      `===> Getting backup for video ID [${currentVideoId}] in room [${currentRoomId}] (call #${apiCallCountRef.current}) <===`,
     );
 
     try {
@@ -146,34 +145,34 @@ export function useBackupVideo({
       const timeout = 20000; // Tăng timeout để đủ thời gian cho API phản hồi
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
-        console.log("Backup API request timed out");
+        devLog("Backup API request timed out");
         controller.abort();
       }, timeout);
 
       // Kiểm tra biến môi trường
       const baseUrl = import.meta.env.VITE_API_BASE_URL;
       if (!baseUrl) {
-        console.error(
-          "===> ERROR: VITE_API_BASE_URL is not defined in environment variables <==="
+        devError(
+          "===> ERROR: VITE_API_BASE_URL is not defined in environment variables <===",
         );
         throw new Error("API base URL not defined");
       }
-      console.log("===> API Base URL:", baseUrl, " <===");
+      devLog("===> API Base URL:", baseUrl, " <===");
 
       // Kiểm tra một lần nữa để chắc chắn
       if (!currentVideoId || !currentRoomId) {
         throw new Error(
-          `Invalid parameters for API call: videoId=${currentVideoId}, roomId=${currentRoomId}`
+          `Invalid parameters for API call: videoId=${currentVideoId}, roomId=${currentRoomId}`,
         );
       }
 
       // Tạo URL với room ID và video ID
       const backupApiUrl = `${baseUrl}/room-music/${currentRoomId}/${currentVideoId}`;
-      console.log("===> Calling backup API:", backupApiUrl, " <===");
+      devLog("===> Calling backup API:", backupApiUrl, " <===");
 
       // Thêm query param để bỏ qua cache và debug
       const noCache = Date.now();
-      console.log("===> Starting axios request <===");
+      devLog("===> Starting axios request <===");
 
       // Tạo request với timeout dài hơn
       const response = await axios.get(
@@ -185,14 +184,14 @@ export function useBackupVideo({
             "Cache-Control": "no-cache",
             Pragma: "no-cache",
           },
-        }
+        },
       );
-      console.log("===> Axios request completed <===");
+      devLog("===> Axios request completed <===");
 
       clearTimeout(timeoutId);
 
       if (response.data?.result?.url) {
-        console.log("API returned backup URL successfully");
+        devLog("API returned backup URL successfully");
         setBackupState((prev) => ({
           ...prev,
           backupUrl: response.data.result.url,
@@ -200,11 +199,11 @@ export function useBackupVideo({
           youtubeError: true,
         }));
       } else {
-        console.error("No backup URL in response:", response.data);
+        devError("No backup URL in response:", response.data);
         throw new Error("No backup URL in API response");
       }
     } catch (error) {
-      console.error("Error getting backup:", error);
+      devError("Error getting backup:", error);
       // Đặt trạng thái lỗi nhưng không hiển thị cho người dùng
       setBackupState((prev) => ({
         ...prev,
@@ -217,7 +216,7 @@ export function useBackupVideo({
         const currentState = backupStateRef.current;
         // Chỉ thử lại nếu vẫn trong trạng thái lỗi và chưa có backup URL
         if (!currentState.backupUrl && currentState.youtubeError) {
-          console.log("Retrying backup API call...");
+          devLog("Retrying backup API call...");
           handleYouTubeError();
         }
       }, 2000);
@@ -283,7 +282,7 @@ export function useBackupVideo({
           backupVideoRef.current.currentTime = event.currentTime;
           backupVideoRef.current
             .play()
-            .catch((e) => console.error("Error playing backup video:", e));
+            .catch((e) => devError("Error playing backup video:", e));
           break;
         case "pause":
           backupVideoRef.current.pause();
@@ -293,26 +292,15 @@ export function useBackupVideo({
           break;
       }
     },
-    [backupState.backupUrl]
+    [backupState.backupUrl],
   );
 
   // Handler for when backup video is loaded
   const handleVideoLoaded = useCallback(() => {
-    const currentUrl = backupStateRef.current.backupUrl;
-    if (!currentUrl) return;
-
-    // Chỉ xử lý ready một lần cho mỗi URL — tránh loop khi HLS fire nhiều event.
-    if (videoReadyFiredForUrlRef.current === currentUrl) {
-      return;
-    }
-    videoReadyFiredForUrlRef.current = currentUrl;
-
-    console.log("Backup video ready");
+    devLog("Backup video ready");
 
     const currentVideoId = videoIdRef.current;
     const currentRoomId = roomIdRef.current;
-    const isHls = isHlsUrl(currentUrl);
-
     setBackupState((prev) => ({
       ...prev,
       backupVideoReady: true,
@@ -323,8 +311,15 @@ export function useBackupVideo({
       try {
         backupVideoRef.current.volume = volume / 100;
         backupVideoRef.current.muted = false;
+
+        devLog(
+          "Backup video audio settings: volume =",
+          volume / 100,
+          "muted =",
+          false,
+        );
       } catch (e) {
-        console.error("Error setting backup audio:", e);
+        devError("Error setting backup audio:", e);
       }
     }
 
@@ -338,21 +333,53 @@ export function useBackupVideo({
     setTimeout(() => {
       onVideoReady();
 
-      // HlsVideo tự play sau MANIFEST_PARSED — không gọi play() thêm để tránh interrupt.
-      if (isHls || !backupVideoRef.current) return;
+      // Auto play backup video and hide YouTube player
+      if (backupVideoRef.current) {
+        devLog(
+          "Starting playback of backup video with delay to prevent conflicts",
+        );
 
-      backupVideoRef.current.volume = volume / 100;
-      backupVideoRef.current.muted = false;
-      backupVideoRef.current.play().catch((error) => {
-        console.error("Error auto-playing backup video:", error);
-      });
-    }, 100);
+        // Đảm bảo volume được thiết lập trước khi phát
+        backupVideoRef.current.volume = volume / 100;
+
+        // Đảm bảo video không bị tắt tiếng
+        backupVideoRef.current.muted = false;
+
+        backupVideoRef.current
+          .play()
+          .then(() => {
+            devLog("Backup video playing successfully");
+          })
+          .catch((error) => {
+            devError("Error auto-playing backup video:", error);
+            // Thử phát lần nữa sau khi người dùng tương tác
+            document.addEventListener(
+              "click",
+              () => {
+                if (backupVideoRef.current) {
+                  backupVideoRef.current.volume = volume / 100;
+                  backupVideoRef.current.muted = false;
+                  backupVideoRef.current
+                    .play()
+                    .catch((e) =>
+                      devError(
+                        "Still couldn't play after user interaction:",
+                        e,
+                      ),
+                    );
+                }
+              },
+              { once: true },
+            );
+          });
+      }
+    }, 100); // Giảm delay xuống 100ms để bắt đầu phát nhanh hơn
   }, [socket, onVideoReady, volume]);
 
   // Handler for backup video error
   const handleVideoError = useCallback(
     (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
-      console.error("Error playing backup video:", e);
+      devError("Error playing backup video:", e);
 
       const currentUrl = backupStateRef.current.backupUrl;
       // Local HLS failed: fall back to the already-mounted YouTube iframe.
@@ -377,7 +404,7 @@ export function useBackupVideo({
         isLoadingBackup: false,
       }));
     },
-    []
+    [],
   );
 
   return {

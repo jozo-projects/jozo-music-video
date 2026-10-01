@@ -1,35 +1,25 @@
 import React from "react";
-import { CUTE_MESSAGES } from "./constants";
-import welcomeBackground from "../../assets/jozo-party-bg.png";
+import welcomeBackground from "../../assets/member-poster-final.png";
 
-interface WelcomeScreenProps {
-  currentMessageIndex: number;
-}
-
-const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
-  currentMessageIndex,
-}) => {
+const WelcomeScreen: React.FC = () => {
   return (
-    <div className="absolute inset-0 z-[30] flex flex-col">
-      {/* Nền Jozo — toàn màn hình */}
-      <div className="absolute inset-0 w-full h-full">
+    <div className="absolute inset-0 z-[30] flex flex-col bg-black overflow-hidden">
+      {/* Nền blur scale — kiểu YouTube/Facebook letterbox */}
+      <div className="absolute inset-0 scale-110" aria-hidden>
         <img
           src={welcomeBackground}
-          alt="Jozo Karaoke Bash"
-          className="w-full h-full object-cover"
+          alt=""
+          className="h-full w-full object-cover blur-2xl brightness-75"
         />
       </div>
 
-      {/* Content Overlay */}
-      <div className="relative z-10 w-full h-full flex flex-col justify-center items-center">
-        {/* Centered cute message */}
-        <div className="w-full px-4 py-2">
-          <div className="px-4 py-2 rounded-xl bg-black/30 backdrop-blur-sm border border-white/10 shadow-[0_0_15px_rgba(0,0,0,0.3)]">
-            <p className="text-lg font-bold text-center bg-gradient-to-r from-red-400 via-yellow-300 to-green-400 bg-clip-text text-transparent">
-              {CUTE_MESSAGES[currentMessageIndex]}
-            </p>
-          </div>
-        </div>
+      {/* Poster chính sắc nét, giữ tỉ lệ */}
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img
+          src={welcomeBackground}
+          alt="Đăng ký thành viên Jozo"
+          className="max-h-full max-w-full object-contain drop-shadow-2xl"
+        />
       </div>
     </div>
   );

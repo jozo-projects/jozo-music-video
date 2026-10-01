@@ -1,14 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { logo } from "../../assets";
+import { logo, waitingVideo } from "../../assets";
 import { RecordingStudio } from "../../RecordingStudio";
-import { CUTE_MESSAGES, FALLBACK_VIDEO_ID } from "./constants";
+import { FALLBACK_VIDEO_ID } from "./constants";
 import { fetchRoomNowPlaying } from "./fetchRoomNowPlaying";
 import { useBackupVideo } from "./hooks/useBackupVideo";
 import { useSocketConnection } from "./hooks/useSocketConnection";
 import { useVideoEvents } from "./hooks/useVideoEvents";
 import PauseOverlay from "./PauseOverlay";
+import RoomSelectModal from "./RoomSelectModal";
 import {
   BackupState,
   VideoState,
@@ -21,19 +22,11 @@ import {
   PoweredByBadge,
   VolumeToastComponent,
 } from "./UIOverlays";
-import WelcomeScreen from "./WelcomeScreen";
 import YouTubePlayerIframe from "./YouTubePlayerIframe";
 import HlsVideo from "./HlsVideo";
-import { buildHlsUrl, isHlsUrl } from "../../utils/hls";
+import { buildHlsUrl, isHlsUrl, resolveHlsUrl } from "../../utils/hls";
 import { enforceFallbackQualityOnChange } from "./youtubePlaybackQuality";
-
-const IS_DEV = import.meta.env.DEV;
-const devLog = (...args: unknown[]) => {
-  if (IS_DEV) console.log(...args);
-};
-const devError = (...args: unknown[]) => {
-  if (IS_DEV) console.error(...args);
-};
+import { IS_DEV, devError, devLog } from "@/utils/devLog";
 
 interface YouTubePlayerEvent {
   data: number;
@@ -67,12 +60,29 @@ const MemoYouTubePlayerIframe = memo(YouTubePlayerIframe);
 
 const VideoPlayer = () => {
   const playerRef = useRef<YouTubePlayerRef>(null);
+  const waitingVideoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [params] = useSearchParams();
   const roomId = params.get("roomId") || "";
   const hlsVideoId = params.get("hlsVideoId") || "";
-  const hlsStreamUrl = hlsVideoId ? buildHlsUrl(hlsVideoId) : "";
+  const [hlsStreamUrl, setHlsStreamUrl] = useState(() =>
+    hlsVideoId ? buildHlsUrl(hlsVideoId) : "",
+  );
   const isHlsOnlyMode = !!hlsVideoId;
+
+  useEffect(() => {
+    let cancelled = false;
+    const directUrl = buildHlsUrl(hlsVideoId);
+    setHlsStreamUrl(directUrl);
+    if (!hlsVideoId || directUrl) return;
+
+    void resolveHlsUrl(hlsVideoId).then((url) => {
+      if (!cancelled) setHlsStreamUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hlsVideoId]);
 
   const [videoState, setVideoState] = useState<VideoState>({
     nowPlayingData: null,
@@ -83,7 +93,6 @@ const VideoPlayer = () => {
 
   const [isChangingSong, setIsChangingSong] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
   const [volume, setVolume] = useState(100);
   const [showTitle, setShowTitle] = useState(true);
   const [volumeToast, setVolumeToast] = useState<VolumeToast>({
@@ -91,6 +100,27 @@ const VideoPlayer = () => {
     value: 100,
   });
   const [showPoweredBy, setShowPoweredBy] = useState(true);
+  const [showRoomModal, setShowRoomModal] = useState(false);
+  const [photoUrls, setPhotoUrls] = useState<string[]>([]);
+  const [isPhotoShowing, setIsPhotoShowing] = useState(false);
+  const [photoIndex, setPhotoIndex] = useState(0);
+
+  const openRoomModal = useCallback(() => setShowRoomModal(true), []);
+  const closeRoomModal = useCallback(() => setShowRoomModal(false), []);
+
+  const handleSelectRoom = useCallback(
+    (selectedRoomId: number) => {
+      if (String(selectedRoomId) === roomId) {
+        setShowRoomModal(false);
+        return;
+      }
+
+      const next = new URLSearchParams(params);
+      next.set("roomId", String(selectedRoomId));
+      window.location.assign(`${window.location.pathname}?${next.toString()}`);
+    },
+    [params, roomId],
+  );
 
   /** Sau GET now-playing: nếu server báo pause, chặn một lần PLAYING để pause và không emit play lên socket. */
   const hydratePauseAfterPlayRef = useRef(false);
@@ -105,6 +135,43 @@ const VideoPlayer = () => {
     onVideosOn: () => {},
   });
 
+  useEffect(() => {
+    if (!socket) return;
+    const handleStarted = (payload: { photos?: Array<{ url: string }> }) => {
+      const urls = (payload.photos ?? [])
+        .map((photo) => photo.url)
+        .filter(Boolean);
+      setPhotoUrls(urls);
+      setPhotoIndex(0);
+      setIsPhotoShowing(urls.length > 0);
+    };
+    const handleHidden = () => {
+      setIsPhotoShowing(false);
+      setPhotoIndex(0);
+    };
+    const handleDeleted = () => {
+      setPhotoUrls([]);
+      setIsPhotoShowing(false);
+    };
+    socket.on("photo_display_started", handleStarted);
+    socket.on("photo_display_hidden", handleHidden);
+    socket.on("photo_display_deleted", handleDeleted);
+    return () => {
+      socket.off("photo_display_started", handleStarted);
+      socket.off("photo_display_hidden", handleHidden);
+      socket.off("photo_display_deleted", handleDeleted);
+    };
+  }, [socket]);
+
+  useEffect(() => {
+    if (!isPhotoShowing || photoUrls.length <= 1) return;
+    const timer = window.setInterval(
+      () => setPhotoIndex((index) => (index + 1) % photoUrls.length),
+      8000,
+    );
+    return () => window.clearInterval(timer);
+  }, [isPhotoShowing, photoUrls.length]);
+
   // ID bài hát hiện tại (giữ qua những khoảng transition để không nháy UI).
   const currentVideoRef = useRef<string | null>(null);
 
@@ -118,7 +185,7 @@ const VideoPlayer = () => {
 
   // ID bài trong queue từ server (rỗng = không có bài).
   const queuedVideoId = videoState.nowPlayingData?.video_id ?? "";
-  // Luôn có video cho iframe: bài thật hoặc nhạc chờ YouTube (ẩn dưới Welcome).
+  // Khi phòng rảnh, dùng YouTube fallback chỉ để phát tiếng cho video chờ local.
   const youtubeEmbedVideoId = queuedVideoId || FALLBACK_VIDEO_ID;
 
   const handleBackupVideoEnd = useCallback(() => {
@@ -187,7 +254,9 @@ const VideoPlayer = () => {
   useEffect(() => {
     if (!hlsVideoId) return;
     if (!hlsStreamUrl) {
-      devError("hlsVideoId không hợp lệ hoặc VITE_API_LOCAL_SERVER chưa cấu hình");
+      devError(
+        "hlsVideoId không hợp lệ hoặc VITE_API_LOCAL_SERVER chưa cấu hình",
+      );
       return;
     }
     devLog("HLS stream:", hlsStreamUrl);
@@ -291,7 +360,7 @@ const VideoPlayer = () => {
         PLAYING: 1,
         PAUSED: 2,
         BUFFERING: 3,
-        CUED: 5
+        CUED: 5,
       };
 
       switch (event.data) {
@@ -383,10 +452,7 @@ const VideoPlayer = () => {
         case YT.ENDED: {
           try {
             const vid = playerRef.current.getVideoData().video_id;
-            if (
-              vid === FALLBACK_VIDEO_ID &&
-              !videoState.nowPlayingData
-            ) {
+            if (vid === FALLBACK_VIDEO_ID && !videoState.nowPlayingData) {
               playerRef.current.seekTo(0, true);
               playerRef.current.playVideo();
               break;
@@ -408,16 +474,8 @@ const VideoPlayer = () => {
       isChangingSong,
       backupState.backupUrl,
       backupState.isLoadingBackup,
-    ]
+    ],
   );
-
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      setCurrentMessageIndex((prev) => (prev + 1) % CUTE_MESSAGES.length);
-    }, 5000);
-
-    return () => clearInterval(intervalId);
-  }, []);
 
   // Show/hide song title: visible 10s đầu mỗi bài mới; khi pause luôn hiện.
   useEffect(() => {
@@ -466,11 +524,7 @@ const VideoPlayer = () => {
     ) {
       setIsChangingSong(false);
     }
-  }, [
-    videoState.isBuffering,
-    isChangingSong,
-    videoState.nowPlayingData,
-  ]);
+  }, [videoState.isBuffering, isChangingSong, videoState.nowPlayingData]);
 
   useEffect(() => {
     if (!socket) return;
@@ -503,6 +557,9 @@ const VideoPlayer = () => {
   useEffect(() => {
     if (backupVideoRef.current) {
       backupVideoRef.current.volume = volume / 100;
+    }
+    if (waitingVideoRef.current) {
+      waitingVideoRef.current.volume = volume / 100;
     }
   }, [volume, backupVideoRef]);
 
@@ -549,9 +606,7 @@ const VideoPlayer = () => {
 
       const np = videoState.nowPlayingData;
       const activeSong =
-        !!np &&
-        np.video_id.length > 0 &&
-        np.video_id !== FALLBACK_VIDEO_ID;
+        !!np && np.video_id.length > 0 && np.video_id !== FALLBACK_VIDEO_ID;
 
       try {
         if (np) {
@@ -587,13 +642,7 @@ const VideoPlayer = () => {
         isBuffering: false,
       }));
     },
-    [
-      volume,
-      socket,
-      roomId,
-      videoState.nowPlayingData,
-      videoState.isPaused,
-    ]
+    [volume, socket, roomId, videoState.nowPlayingData, videoState.isPaused],
   );
 
   const handlePlaybackQualityChange = useCallback(
@@ -604,10 +653,7 @@ const VideoPlayer = () => {
         videoState.currentVideoId === FALLBACK_VIDEO_ID;
       enforceFallbackQualityOnChange(isFallback, event.data, event.target);
     },
-    [
-      videoState.nowPlayingData,
-      videoState.currentVideoId,
-    ]
+    [videoState.nowPlayingData, videoState.currentVideoId],
   );
 
   const triggerBackupVideo = useCallback(() => {
@@ -700,7 +746,7 @@ const VideoPlayer = () => {
       backupState.backupUrl,
       backupState.isLoadingBackup,
       backupState.youtubeError,
-    ]
+    ],
   );
 
   // Khi backup video ready → tắt tiếng + pause YouTube player (giữ nguyên iframe).
@@ -736,7 +782,7 @@ const VideoPlayer = () => {
           ? Math.max(
               0,
               videoState.nowPlayingData.currentTime +
-                (Date.now() - videoState.nowPlayingData.timestamp) / 1000
+                (Date.now() - videoState.nowPlayingData.timestamp) / 1000,
             )
           : 0,
       });
@@ -788,11 +834,7 @@ const VideoPlayer = () => {
         youtubeError: false,
         backupError: false,
       }));
-      if (
-        videoState.nowPlayingData?.video_id &&
-        roomId &&
-        socket?.connected
-      ) {
+      if (videoState.nowPlayingData?.video_id && roomId && socket?.connected) {
         socket.emit("request_current_song", { roomId });
       }
     }, 30000);
@@ -816,30 +858,29 @@ const VideoPlayer = () => {
       setBackupState((prev) =>
         prev.isLoadingBackup && !prev.backupUrl
           ? { ...prev, isLoadingBackup: false, youtubeError: false }
-          : prev
+          : prev,
       );
     }, 15000);
     return () => clearTimeout(watchdog);
-  }, [
-    backupState.isLoadingBackup,
-    backupState.backupUrl,
-    setBackupState,
-  ]);
+  }, [backupState.isLoadingBackup, backupState.backupUrl, setBackupState]);
 
   if (isVideoOff) {
     return <RecordingStudio />;
   }
 
-  const isHlsTestMode = isHlsOnlyMode;
-  const hasActiveSong =
-    !!queuedVideoId && queuedVideoId !== FALLBACK_VIDEO_ID;
-  const showWelcome = !hasActiveSong && !isHlsTestMode;
+  const isBackupActive = !!(
+    backupState.backupUrl && backupState.backupVideoReady
+  );
+  const hasActiveSong = !!queuedVideoId;
+  // Ẩn YouTube fallback dưới video chờ local; chỉ giữ lại audio của iframe.
+  const hidePrimaryIframe =
+    !hasActiveSong || backupState.youtubeError || isBackupActive;
 
   const initialStartSeconds = videoState.nowPlayingData
     ? Math.max(
         0,
         videoState.nowPlayingData.currentTime +
-          (Date.now() - videoState.nowPlayingData.timestamp) / 1000
+          (Date.now() - videoState.nowPlayingData.timestamp) / 1000,
       )
     : 0;
 
@@ -857,7 +898,7 @@ const VideoPlayer = () => {
   return (
     <div
       ref={containerRef}
-      className="relative w-screen h-screen bg-black"
+      className="relative w-screen h-screen overflow-hidden bg-black"
       onClick={handleDoubleTap}
     >
       {/* CSS tối thiểu: ẩn mọi overlay của YouTube (UI, endscreen, error…).
@@ -886,6 +927,16 @@ const VideoPlayer = () => {
           }
         `}
       </style>
+
+      {isPhotoShowing && photoUrls.length > 0 && (
+        <div className="absolute inset-0 z-[40] bg-black flex items-center justify-center">
+          <img
+            src={photoUrls[photoIndex]}
+            alt="Ảnh khách hàng"
+            className="max-h-full max-w-full object-contain"
+          />
+        </div>
+      )}
 
       <NetworkStatusIndicator isOnline={isOnline} />
       <ConnectionStatusIndicator
@@ -943,32 +994,54 @@ const VideoPlayer = () => {
         </div>
       )}
 
-      {/* Exactly one primary player is mounted at a time. */}
-      {!!youtubeEmbedVideoId &&
-        !activeHlsUrl &&
-        !isHlsTestMode &&
-        !backupState.isLoadingBackup && (
-          <div className="absolute top-0 left-0 w-full h-full z-[5]">
-            <MemoYouTubePlayerIframe
-              playerRef={playerRef}
-              videoId={youtubeEmbedVideoId}
-              isFallback={!videoState.nowPlayingData}
-              startSeconds={initialStartSeconds}
-              onReady={handleYouTubePlayerReady}
-              onStateChange={handleStateChange}
-              onError={handleYouTubeError}
-              onPlaybackQualityChange={handlePlaybackQualityChange}
-            />
-          </div>
-        )}
+      {/* Video chờ local khi chưa có bài trong queue. Loop để chạy liên tục. */}
+      {!hasActiveSong && (
+        <video
+          ref={waitingVideoRef}
+          className="absolute inset-0 w-full h-full object-cover z-[5] bg-black"
+          src={waitingVideo}
+          autoPlay
+          loop
+          muted={volume === 0}
+          playsInline
+          controls={false}
+          preload="auto"
+          aria-label="Video chờ Jozo"
+        />
+      )}
+
+      {/* YouTube: bài trong queue. */}
+      {!!youtubeEmbedVideoId && (
+        <div
+          className={`absolute top-0 left-0 w-full h-full z-[5] ${
+            hidePrimaryIframe ? "opacity-0 pointer-events-none" : "opacity-100"
+          }`}
+        >
+          <MemoYouTubePlayerIframe
+            playerRef={playerRef}
+            videoId={youtubeEmbedVideoId}
+            isFallback={!videoState.nowPlayingData}
+            startSeconds={initialStartSeconds}
+            onReady={handleYouTubePlayerReady}
+            onStateChange={handleStateChange}
+            onError={handleYouTubeError}
+            onPlaybackQualityChange={handlePlaybackQualityChange}
+          />
+        </div>
+      )}
 
       {backupState.youtubeError && !backupState.backupVideoReady && (
         <div className="absolute inset-0 bg-black z-40" />
       )}
 
-      <div className="absolute z-30 top-[15px] right-[15px] w-[140px] h-[50px] bg-black">
+      <button
+        type="button"
+        onClick={openRoomModal}
+        className="absolute z-30 top-[15px] right-[15px] w-[140px] h-[50px] bg-black cursor-pointer"
+        aria-label="Chọn phòng Jozo"
+      >
         <img src={logo} alt="logo" className="w-full h-full" />
-      </div>
+      </button>
 
       {/* Pause overlay — bg đen mờ thuần, KHÔNG dùng backdrop-blur. */}
       {videoState.isPaused && hasActiveSong && videoState.nowPlayingData && (
@@ -978,8 +1051,7 @@ const VideoPlayer = () => {
         </>
       )}
 
-      {/* Welcome screen khi không có bài. */}
-      {showWelcome && <WelcomeScreen currentMessageIndex={currentMessageIndex} />}
+      {/* Video chờ local đã thay thế welcome screen khi chưa có bài. */}
 
       {videoState.nowPlayingData && showTitle && hasActiveSong && (
         <div className="absolute top-4 left-4 z-50 bg-black p-4 rounded-lg text-white">
@@ -990,7 +1062,10 @@ const VideoPlayer = () => {
 
       <VolumeToastComponent volumeToast={volumeToast} />
 
-      <PoweredByBadge show={showPoweredBy || showWelcome} />
+      <PoweredByBadge
+        show={showPoweredBy || !hasActiveSong}
+        onClick={openRoomModal}
+      />
 
       {backupState.youtubeError &&
         !backupState.backupVideoReady &&
@@ -1020,11 +1095,15 @@ const VideoPlayer = () => {
             </p>
           </div>
         )}
+
+      <RoomSelectModal
+        open={showRoomModal}
+        currentRoomId={roomId}
+        onSelect={handleSelectRoom}
+        onClose={closeRoomModal}
+      />
     </div>
   );
 };
 
 export default memo(VideoPlayer);
-
-// Dùng devLog tạm để tránh lint unused-var khi IS_DEV=false.
-void devLog;

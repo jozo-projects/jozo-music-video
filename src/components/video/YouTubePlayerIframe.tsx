@@ -6,21 +6,25 @@ import {
   enforcePreferredQualityOnChange,
 } from "./youtubePlaybackQuality";
 import { resolveLowPowerMode } from "./deviceCapability";
+import { devError, devLog } from "@/utils/devLog";
 
 // Detect 1 lần khi module load, cố định trong suốt phiên.
 const IS_LOW_POWER = resolveLowPowerMode();
-const IS_DEV = import.meta.env.DEV;
-
-const devLog = (...args: unknown[]) => {
-  if (IS_DEV) console.log(...args);
-};
-const devError = (...args: unknown[]) => {
-  if (IS_DEV) console.error(...args);
-};
 
 // ID ổn định cho placeholder div — YT.Player sẽ replace element này thành <iframe>.
 const PLAYER_ELEMENT_ID = "youtube-player";
 const YOUTUBE_EMBED_HOST = "https://www.youtube.com";
+
+/** Ép tắt CC — YouTube hay bật lại khi đổi bài / auto-translate. */
+function disableCaptions(player: any) {
+  if (!player) return;
+  try {
+    player.unloadModule?.("captions");
+    player.setOption?.("captions", "track", {});
+  } catch {
+    // ignore — API có thể chưa sẵn sàng
+  }
+}
 
 // ---------------- YT IFrame API loader (global, load 1 lần) ----------------
 let apiLoaded = !!(window as any).YT && !!(window as any).YT.Player;
@@ -163,9 +167,8 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           enablejsapi: 1,
           playsinline: 1,
           disablekb: 1,
+          // 0 = không ép hiện CC; tắt hẳn bằng disableCaptions() (YouTube không có param disable).
           cc_load_policy: 0,
-          cc_lang_pref: "none",
-          hl: "vi",
           start:
             startSecondsRef.current && startSecondsRef.current > 0
               ? Math.floor(startSecondsRef.current)
@@ -175,13 +178,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
           onReady: (event: any) => {
             try {
               const target = event.target;
-              // Tắt captions — mặc định tv-box hay bật tiếng Việt auto-translate.
-              try {
-                target.unloadModule?.("captions");
-                target.setOption?.("captions", "track", {});
-              } catch {
-                // ignore
-              }
+              disableCaptions(target);
 
               applyInitialPlaybackQuality(
                 target,
@@ -196,7 +193,14 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
             }
             onReadyRef.current(event);
           },
-          onStateChange: (event: any) => onStateChangeRef.current(event),
+          onStateChange: (event: any) => {
+            // YouTube hay bật lại CC khi BUFFERING / PLAYING / CUED.
+            const state = event?.data;
+            if (state === 1 || state === 3 || state === 5) {
+              disableCaptions(event?.target);
+            }
+            onStateChangeRef.current(event);
+          },
           onError: (event: any) => onErrorRef.current(event),
           onPlaybackQualityChange: (event: any) => {
             onQualityRef.current(event);
@@ -241,6 +245,9 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         videoId,
         startSeconds: startSecondsRef.current ?? 0,
       });
+      // CC thường được bật lại sau khi load — ép tắt thêm một nhịp.
+      disableCaptions(player);
+      window.setTimeout(() => disableCaptions(player), 500);
     } catch (e) {
       devError("loadVideoById failed:", e);
     }

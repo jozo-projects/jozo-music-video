@@ -2,14 +2,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { PlaySongEvent, VideoEvent, VideoState } from "../types";
-
-const IS_DEV = import.meta.env.DEV || import.meta.env.MODE === "development";
-const devLog = (...args: unknown[]) => {
-  if (IS_DEV) console.log(...args);
-};
-const devError = (...args: unknown[]) => {
-  if (IS_DEV) console.error(...args);
-};
+import { devError, devLog } from "@/utils/devLog";
 
 const TIME_UPDATE_INTERVAL_MS = 2500;
 const TIME_UPDATE_FORCE_EMIT_MS = 5000;
