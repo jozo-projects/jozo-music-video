@@ -3,7 +3,11 @@ import axios from "axios";
 import { BackupState, BackupVideoProps, VideoEvent } from "../types";
 import React from "react";
 import { devError, devLog } from "@/utils/devLog";
-import { isHlsUrl, resolveHlsUrl } from "../../../utils/hls";
+import {
+  isHlsUrl,
+  isLocalHlsFallbackEnabled,
+  resolveHlsUrl,
+} from "../../../utils/hls";
 
 /**
  * Return type for useBackupVideo hook
@@ -128,17 +132,24 @@ export function useBackupVideo({
         youtubeError: true,
       }));
 
-      // Ưu tiên HLS từ local server nếu đã cấu hình
-      const hlsUrl = await resolveHlsUrl(currentVideoId);
-      if (hlsUrl) {
-        console.log("===> Using HLS backup URL:", hlsUrl, " <===");
-        setBackupState((prev) => ({
-          ...prev,
-          backupUrl: hlsUrl,
-          isLoadingBackup: false,
-          youtubeError: true,
-        }));
-        return;
+      // Local worker discovery is opt-in for development only. Production relies
+      // exclusively on hls_url hydrated from the BE catalog.
+      if (isLocalHlsFallbackEnabled()) {
+        const hlsUrl = await resolveHlsUrl(currentVideoId);
+        if (hlsUrl) {
+          console.log(
+            "===> Using explicit local HLS fallback URL:",
+            hlsUrl,
+            " <===",
+          );
+          setBackupState((prev) => ({
+            ...prev,
+            backupUrl: hlsUrl,
+            isLoadingBackup: false,
+            youtubeError: true,
+          }));
+          return;
+        }
       }
 
       // Xóa timeout cũ nếu có
@@ -150,7 +161,9 @@ export function useBackupVideo({
       }, timeout);
 
       // Kiểm tra biến môi trường
-      const baseUrl = import.meta.env.VITE_API_BASE_URL;
+      const baseUrl =
+        import.meta.env.VITE_API_BASE_URL ||
+        (import.meta.env.DEV ? "http://localhost:4000" : "");
       if (!baseUrl) {
         devError(
           "===> ERROR: VITE_API_BASE_URL is not defined in environment variables <===",

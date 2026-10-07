@@ -9,6 +9,9 @@ export interface NowPlayingData {
   duration: number;
   timestamp: number;
   currentTime: number;
+  hls_url?: string;
+  media_id?: string;
+  media_status?: string;
 }
 
 // Interface for Video Event
@@ -16,6 +19,9 @@ export interface VideoEvent {
   event: "play" | "pause" | "seek";
   videoId: string;
   currentTime: number;
+  hls_url?: string;
+  media_id?: string;
+  media_status?: string;
 }
 
 // Interface for Play Song Event
@@ -27,9 +33,10 @@ export interface PlaySongEvent {
   duration: number;
   currentTime: number;
   timestamp: number;
+  hls_url?: string;
+  media_id?: string;
+  media_status?: string;
 }
-
-// Interface for Video Turned Off Data
 export interface VideoTurnedOffData {
   status: string;
 }

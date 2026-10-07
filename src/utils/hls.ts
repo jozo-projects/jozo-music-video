@@ -1,5 +1,16 @@
 export function getLocalServerUrl(): string {
-  return import.meta.env.VITE_API_LOCAL_SERVER?.replace(/\/$/, "") ?? "";
+  return import.meta.env.VITE_API_LOCAL_SERVER?.replace(/\/$/, "") || "";
+}
+
+/**
+ * Local worker HLS discovery is an explicit development-only escape hatch.
+ * Production playback must discover hls_url from BE/catalog and never call :4001.
+ */
+export function isLocalHlsFallbackEnabled(): boolean {
+  return (
+    import.meta.env.DEV &&
+    import.meta.env.VITE_ENABLE_LOCAL_HLS_FALLBACK === "true"
+  );
 }
 
 export function buildHlsUrl(videoId: string): string {
@@ -7,6 +18,7 @@ export function buildHlsUrl(videoId: string): string {
     return videoId;
   }
 
+  if (!isLocalHlsFallbackEnabled()) return "";
   const base = getLocalServerUrl();
   if (!base || !videoId) return "";
   // Test mode: truyền Mongo media id trực tiếp
@@ -18,6 +30,7 @@ export function buildHlsUrl(videoId: string): string {
 
 /** Lấy hlsUrl từ local worker theo YouTube videoId. */
 export async function resolveHlsUrl(videoId: string): Promise<string> {
+  if (!isLocalHlsFallbackEnabled()) return "";
   const base = getLocalServerUrl();
   if (!base || !videoId) return "";
 
@@ -26,9 +39,13 @@ export async function resolveHlsUrl(videoId: string): Promise<string> {
   }
 
   try {
-    const res = await fetch(`${base}/api/media/video/${encodeURIComponent(videoId)}`);
+    const res = await fetch(
+      `${base}/api/media/video/${encodeURIComponent(videoId)}`,
+    );
     if (!res.ok) return "";
-    const json = (await res.json()) as { data?: { status?: string; hlsUrl?: string } };
+    const json = (await res.json()) as {
+      data?: { status?: string; hlsUrl?: string };
+    };
     if (json.data?.status === "ready" && json.data.hlsUrl) {
       return json.data.hlsUrl;
     }

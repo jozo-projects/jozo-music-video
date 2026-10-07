@@ -4,6 +4,7 @@ import { isHlsUrl } from "../../utils/hls";
 
 interface HlsVideoProps {
   url: string;
+  playbackKey?: string;
   volume?: number;
   onLoadedData?: () => void;
   onEnded?: () => void;
@@ -11,17 +12,37 @@ interface HlsVideoProps {
 }
 
 const HlsVideo = forwardRef<HTMLVideoElement, HlsVideoProps>(
-  ({ url, volume = 100, onLoadedData, onEnded, onError }, ref) => {
+  ({ url, playbackKey, volume = 100, onLoadedData, onEnded, onError }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const hlsRef = useRef<Hls | null>(null);
     const loadedUrlRef = useRef("");
     const readyNotifiedRef = useRef(false);
     const onLoadedDataRef = useRef(onLoadedData);
     const onErrorRef = useRef(onError);
+    const onEndedRef = useRef(onEnded);
+    const endedNotifiedRef = useRef(false);
+    const acceptEndedRef = useRef(true);
     onLoadedDataRef.current = onLoadedData;
     onErrorRef.current = onError;
+    onEndedRef.current = onEnded;
 
-    useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
+    const notifyEnded = () => {
+      const video = videoRef.current;
+      if (!acceptEndedRef.current || !video || endedNotifiedRef.current) return;
+      const duration = video.duration;
+      const atEnd =
+        video.ended ||
+        (Number.isFinite(duration) &&
+          duration > 0 &&
+          video.currentTime >= duration - 0.75);
+      if (!atEnd) return;
+      endedNotifiedRef.current = true;
+      onEndedRef.current?.();
+    };
+
+    // Expose the actual HTMLVideoElement so parent playback handlers never
+    // fall through to the hidden YouTube iframe.
+    useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
     const notifyReadyOnce = () => {
       if (readyNotifiedRef.current) return;
@@ -33,9 +54,16 @@ const HlsVideo = forwardRef<HTMLVideoElement, HlsVideoProps>(
       readyNotifiedRef.current = false;
     }, [url]);
 
+    // Each queue entry may reuse the mounted HLS element and URL, but must be
+    // allowed to emit its own ended event.
+    useEffect(() => {
+      endedNotifiedRef.current = false;
+    }, [url, playbackKey]);
+
     useEffect(() => {
       const video = videoRef.current;
       if (!video || !url) return;
+      acceptEndedRef.current = true;
 
       // Đã attach đúng URL — không destroy + load lại.
       if (hlsRef.current && loadedUrlRef.current === url) {
@@ -63,6 +91,9 @@ const HlsVideo = forwardRef<HTMLVideoElement, HlsVideoProps>(
               console.warn("HLS autoplay blocked:", err);
             });
           });
+          hls.on(Hls.Events.MEDIA_ENDED, () => {
+            notifyEnded();
+          });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (data.fatal) {
               console.error("HLS fatal error:", data);
@@ -80,7 +111,12 @@ const HlsVideo = forwardRef<HTMLVideoElement, HlsVideoProps>(
         video.src = url;
       }
 
+      const handleNativeEnded = () => notifyEnded();
+      video.addEventListener("ended", handleNativeEnded);
+
       return () => {
+        acceptEndedRef.current = false;
+        video.removeEventListener("ended", handleNativeEnded);
         if (hlsRef.current) {
           hlsRef.current.destroy();
           hlsRef.current = null;
@@ -108,7 +144,7 @@ const HlsVideo = forwardRef<HTMLVideoElement, HlsVideoProps>(
         disablePictureInPicture
         controlsList="nodownload noplaybackrate nofullscreen"
         onLoadedData={isHlsUrl(url) && Hls.isSupported() ? undefined : notifyReadyOnce}
-        onEnded={onEnded}
+        onEnded={notifyEnded}
         onError={onError}
         preload="auto"
         muted={volume === 0}
