@@ -88,12 +88,16 @@ export function useSocketConnection({
 
     devLog(
       `Kết nối tới socket server: ${
-        import.meta.env.VITE_SOCKET_URL || "URL mặc định"
+        import.meta.env.VITE_SOCKET_URL ||
+          (import.meta.env.DEV ? "http://localhost:8080" : "URL mặc định")
       }`,
     );
 
     // Tạo kết nối socket mới
-    const socketInstance = io(import.meta.env.VITE_SOCKET_URL || "", {
+    const socketUrl =
+      import.meta.env.VITE_SOCKET_URL ||
+      (import.meta.env.DEV ? "http://localhost:8080" : "");
+    const socketInstance = io(socketUrl, {
       query: {
         roomId,
         deviceId: getDeviceId(),

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { PlaySongEvent, VideoEvent, VideoState } from "../types";
 import { FALLBACK_VIDEO_ID } from "../constants";
+import { transitionBackupState, songPlaybackKey } from "../hlsTransitionState";
 import { devError, devLog } from "@/utils/devLog";
 
 const TIME_UPDATE_INTERVAL_MS = 2500;
@@ -42,6 +43,8 @@ interface UseVideoEventsProps {
   backupState: BackupState;
   setBackupState: React.Dispatch<React.SetStateAction<BackupState>>;
   onSongEnded?: () => void; // Thêm callback tùy chọn khi bài hát kết thúc
+  /** Không reset backup/HLS khi socket đổi bài (chế độ test HLS). */
+  hlsOnlyMode?: boolean;
 }
 
 export function useVideoEvents({
@@ -56,12 +59,16 @@ export function useVideoEvents({
   backupState,
   setBackupState,
   onSongEnded,
+  hlsOnlyMode = false,
 }: UseVideoEventsProps) {
   // Create refs to store the latest values without triggering re-renders
   const videoStateRef = useRef(videoState);
   const roomIdRef = useRef(roomId);
   const backupStateRef = useRef(backupState);
   const socketRef = useRef(socket);
+  const clearNowPlayingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Thêm ref để lưu trữ thời gian gần nhất đã gửi, đặt ở đây để không gặp lỗi
   const lastTimeRef = useRef<{
@@ -77,6 +84,30 @@ export function useVideoEvents({
     backupStateRef.current = backupState;
     socketRef.current = socket;
   }, [videoState, roomId, backupState, socket]);
+
+  // A second queue entry may have the same HLS URL. The mounted video then
+  // stays mounted, so it cannot emit a new load/ready event for that entry.
+  const applySongBackup = useCallback((url: string) => {
+    if (hlsOnlyMode) return;
+    const { state, replayMountedVideo } = transitionBackupState(
+      backupStateRef.current,
+      url,
+    );
+    backupStateRef.current = state;
+    setBackupState(state);
+    if (replayMountedVideo && backupVideoRef.current) {
+      try {
+        backupVideoRef.current.currentTime = 0;
+        void backupVideoRef.current.play().catch((error) =>
+          devError("Error replaying HLS video:", error),
+        );
+        setIsChangingSong(false);
+        setVideoState((prev) => ({ ...prev, isBuffering: false }));
+      } catch (error) {
+        devError("Error rewinding HLS video:", error);
+      }
+    }
+  }, [hlsOnlyMode, backupVideoRef, setBackupState, setIsChangingSong, setVideoState]);
 
   // Handle current song event from server
   useEffect(() => {
@@ -109,16 +140,13 @@ export function useVideoEvents({
           isPaused: false,
         }));
 
-        // Reset backup states
-        setBackupState({
-          backupUrl: "",
-          isLoadingBackup: false,
-          backupError: false,
-          backupVideoReady: false,
-          youtubeError: false,
-        });
+        // Apply catalog HLS without hiding an already-ready video when the
+        // next queue entry points to the same URL.
+        applySongBackup(data.hls_url || "");
 
-        if (playerRef.current?.loadVideoById) {
+        if (hlsOnlyMode || data.hls_url) return;
+
+        if (!hlsOnlyMode && !data.hls_url && playerRef.current?.loadVideoById) {
           // Thêm mới: Đảm bảo player không bị mute trước khi load video mới
           try {
             playerRef.current.unMute?.();
@@ -143,7 +171,7 @@ export function useVideoEvents({
     return () => {
       socket.off("current_song", handleCurrentSong);
     };
-  }, [socket]);
+  }, [socket, applySongBackup, hlsOnlyMode, playerRef, setIsChangingSong, setVideoState]);
 
   // Handle play song and video events
   useEffect(() => {
@@ -152,6 +180,12 @@ export function useVideoEvents({
     // Handle play_song event
     const handlePlaySong = (data: PlaySongEvent) => {
       devLog("Received play song:", data);
+      if (!data?.video_id) return;
+
+      if (clearNowPlayingTimerRef.current) {
+        clearTimeout(clearNowPlayingTimerRef.current);
+        clearNowPlayingTimerRef.current = null;
+      }
       setIsChangingSong(true);
 
       // Reset lastTimeRef để bắt đầu emit ngay lập tức
@@ -168,14 +202,10 @@ export function useVideoEvents({
         isPaused: false,
       }));
 
-      // Reset backup states
-      setBackupState({
-        backupUrl: "",
-        isLoadingBackup: false,
-        backupError: false,
-        backupVideoReady: false,
-        youtubeError: false,
-      });
+      // Same HLS URL stays mounted; preserve readiness and replay it from zero.
+      applySongBackup(data.hls_url || "");
+
+      if (hlsOnlyMode || data.hls_url) return;
 
       if (playerRef.current?.loadVideoById) {
         // Thêm mới: Đảm bảo player không bị mute trước khi load video mới
@@ -193,12 +223,27 @@ export function useVideoEvents({
       }
     };
 
-    // Handle playback_event
+    // Handle playback_event. HLS is rendered in a different element than
+    // YouTube, so never fall through to the hidden YouTube player while a
+    // backup URL is active (or while its ref is still mounting).
     const handlePlaybackEvent = (data: VideoEvent) => {
       devLog("Received playback event:", data);
 
+      const currentVideoId = videoStateRef.current.nowPlayingData?.video_id;
+      if (!currentVideoId || data?.videoId !== currentVideoId) return;
+
+      // Catalog HLS is authoritative. Do not let a socket event fall through
+      // to YouTube while the HLS element is mounting.
+      if (
+        videoStateRef.current.nowPlayingData?.hls_url &&
+        !backupStateRef.current.backupUrl
+      ) {
+        return;
+      }
+
       // Handle for backup video
-      if (backupState.backupUrl && backupVideoRef.current) {
+      if (backupStateRef.current.backupUrl) {
+        if (!backupVideoRef.current) return;
         switch (data.event) {
           case "play":
             devLog("Playing backup video at time:", data.currentTime);
@@ -285,52 +330,84 @@ export function useVideoEvents({
     // Hàng đợi trống: bỏ bài vừa hết, tắt backup/loading để poster không bị che,
     // rồi phát nhạc chờ.
     const handleNowPlayingCleared = () => {
-      setIsChangingSong(false);
-      setVideoState((prev) => ({
-        ...prev,
-        nowPlayingData: null,
-        currentVideoId: "",
-        isPaused: false,
-        isBuffering: false,
-      }));
-      setBackupState({
-        backupUrl: "",
-        isLoadingBackup: false,
-        backupError: false,
-        backupVideoReady: false,
-        youtubeError: false,
-      });
-
-      const player = playerRef.current;
-      if (!player?.loadVideoById) return;
-      try {
-        player.unMute?.();
-        const currentId = player.getVideoData?.()?.video_id;
-        if (currentId === FALLBACK_VIDEO_ID) {
-          player.playVideo();
-          return;
-        }
-        player.loadVideoById({
-          videoId: FALLBACK_VIDEO_ID,
-          startSeconds: 0,
-        });
-        player.playVideo();
-      } catch (e) {
-        devError("Error starting waiting music:", e);
+      if (clearNowPlayingTimerRef.current) {
+        clearTimeout(clearNowPlayingTimerRef.current);
       }
+
+      // Clear trễ không được xóa lượt phát mới, kể cả cùng video_id.
+      const songAtClear = videoStateRef.current.nowPlayingData;
+      const playbackKeyAtClear = songAtClear ? songPlaybackKey(songAtClear) : "";
+      clearNowPlayingTimerRef.current = setTimeout(() => {
+        clearNowPlayingTimerRef.current = null;
+        const activeSong = videoStateRef.current.nowPlayingData;
+        const activeKey = activeSong ? songPlaybackKey(activeSong) : "";
+        if (activeKey && activeKey !== playbackKeyAtClear) return;
+
+        setIsChangingSong(false);
+        setVideoState((prev) => ({
+          ...prev,
+          nowPlayingData: null,
+          currentVideoId: "",
+          isPaused: false,
+          isBuffering: false,
+        }));
+        setBackupState({
+          backupUrl: "",
+          isLoadingBackup: false,
+          backupError: false,
+          backupVideoReady: false,
+          youtubeError: false,
+        });
+
+        const player = playerRef.current;
+        if (!player?.loadVideoById) return;
+        try {
+          player.unMute?.();
+          const currentId = player.getVideoData?.()?.video_id;
+          if (currentId === FALLBACK_VIDEO_ID) {
+            player.playVideo();
+            return;
+          }
+          player.loadVideoById({
+            videoId: FALLBACK_VIDEO_ID,
+            startSeconds: 0,
+          });
+          player.playVideo();
+        } catch (e) {
+          devError("Error starting waiting music:", e);
+        }
+      }, 150);
+    };
+
+    // The backend emits now_playing after queue transitions. Normalize it to
+    // the same path as play_song so HLS and YouTube receive identical state.
+    const handleNowPlaying = (data: PlaySongEvent | null) => {
+      if (!data?.video_id) {
+        handleNowPlayingCleared();
+        return;
+      }
+      handlePlaySong(data);
     };
 
     // Register event listeners
     socket.on("play_song", handlePlaySong);
     socket.on("video_event", handlePlaybackEvent);
+    socket.on("playback_event", handlePlaybackEvent);
+    socket.on("now_playing", handleNowPlaying);
     socket.on("now_playing_cleared", handleNowPlayingCleared);
 
     return () => {
       socket.off("play_song", handlePlaySong);
       socket.off("video_event", handlePlaybackEvent);
+      socket.off("playback_event", handlePlaybackEvent);
+      socket.off("now_playing", handleNowPlaying);
       socket.off("now_playing_cleared", handleNowPlayingCleared);
+      if (clearNowPlayingTimerRef.current) {
+        clearTimeout(clearNowPlayingTimerRef.current);
+        clearNowPlayingTimerRef.current = null;
+      }
     };
-  }, [socket, backupState.backupUrl]);
+  }, [socket, applySongBackup, hlsOnlyMode, backupVideoRef, playerRef, setBackupState, setIsChangingSong, setVideoState]);
 
   // Video end handler
   const handleVideoEnd = useCallback(() => {
@@ -506,6 +583,7 @@ export function useVideoEvents({
 
   // Set up time update interval ổn định, đủ thưa để không spam postMessage vào iframe.
   useEffect(() => {
+    if (hlsOnlyMode) return;
     const socket = socketRef.current;
     if (!socket) return;
 
@@ -514,7 +592,7 @@ export function useVideoEvents({
     }, TIME_UPDATE_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
-  }, [handleTimeUpdate]);
+  }, [handleTimeUpdate, hlsOnlyMode]);
 
   useEffect(() => {
     lastTimeRef.current = { currentTime: 0, isPlaying: false };

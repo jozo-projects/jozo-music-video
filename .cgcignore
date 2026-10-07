@@ -1,0 +1,24 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+# Dependencies/build
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+.cache/
+.tmp/
+# VCS/editor/OS
+.git/
+.vscode/
+.idea/
+.DS_Store
+# Logs
+logs/
+*.log
+*.local

@@ -1,5 +1,6 @@
 import axios from "axios";
 import { NowPlayingData } from "./types";
+import { devError, devLog } from "@/utils/devLog";
 
 export interface RoomNowPlayingResult {
   nowPlaying: NowPlayingData;
@@ -68,6 +69,9 @@ function toNowPlaying(obj: Record<string, unknown>): NowPlayingData | null {
   const currentTime =
     Number(obj.currentTime ?? obj.current_time ?? obj.seconds ?? 0) || 0;
   const timestamp = Number(obj.timestamp ?? obj.ts) || Date.now();
+  const hls_url = pickString(obj, ["hls_url", "hlsUrl"]);
+  const media_id = pickString(obj, ["media_id", "mediaId"]);
+  const media_status = pickString(obj, ["media_status", "mediaStatus"]);
 
   return {
     video_id,
@@ -77,6 +81,9 @@ function toNowPlaying(obj: Record<string, unknown>): NowPlayingData | null {
     duration,
     currentTime,
     timestamp,
+    ...(hls_url ? { hls_url } : {}),
+    ...(media_id ? { media_id } : {}),
+    ...(media_status ? { media_status } : {}),
   };
 }
 
@@ -87,17 +94,27 @@ function toNowPlaying(obj: Record<string, unknown>): NowPlayingData | null {
 export async function fetchRoomNowPlaying(
   roomId: string
 ): Promise<RoomNowPlayingResult | null> {
-  const baseUrl = import.meta.env.VITE_API_BASE_URL;
-  if (!baseUrl || !roomId) return null;
+  const baseUrl =
+    import.meta.env.VITE_API_BASE_URL ||
+    (import.meta.env.DEV ? "http://localhost:4000" : "");
+  if (!baseUrl || !roomId) {
+    devError("Cannot fetch now-playing: missing API base URL or roomId", {
+      hasBaseUrl: !!baseUrl,
+      roomId,
+    });
+    return null;
+  }
 
   const base = String(baseUrl).replace(/\/$/, "");
   const url = `${base}/room-music/${encodeURIComponent(roomId)}/now-playing`;
+  devLog("GET now-playing:", url);
 
   try {
     const response = await axios.get<unknown>(url, {
       timeout: 15000,
       validateStatus: (s) => s < 500,
     });
+    devLog("GET now-playing response:", response.status);
 
     if (response.status === 404 || response.status === 204) return null;
     if (response.status >= 400) return null;
@@ -121,7 +138,8 @@ export async function fetchRoomNowPlaying(
     }
 
     return { nowPlaying, shouldPlay: true };
-  } catch {
+  } catch (error) {
+    devError("GET now-playing failed:", error);
     return null;
   }
 }
