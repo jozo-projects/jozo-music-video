@@ -53,6 +53,16 @@ export function useBackupVideo({
   // Thêm một ref để theo dõi trạng thái hiện tại của backupState
   const backupStateRef = useRef(backupState);
   const videoReadyFiredForUrlRef = useRef("");
+  const mountedRef = useRef(true);
+  const volumeRef = useRef(volume);
+  videoIdRef.current = videoId;
+  roomIdRef.current = roomId;
+  backupStateRef.current = backupState;
+  volumeRef.current = volume;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Cập nhật ref khi backupState thay đổi
   useEffect(() => {
@@ -311,6 +321,9 @@ export function useBackupVideo({
   // Handler for when backup video is loaded
   const handleVideoLoaded = useCallback(() => {
     devLog("Backup video ready");
+    const expectedUrl = backupState.backupUrl;
+    const isCurrent = () => mountedRef.current && videoIdRef.current === videoId && roomIdRef.current === roomId && backupStateRef.current.backupUrl === expectedUrl;
+    if (!expectedUrl || !isCurrent()) return;
 
     const currentVideoId = videoIdRef.current;
     const currentRoomId = roomIdRef.current;
@@ -320,10 +333,17 @@ export function useBackupVideo({
       isLoadingBackup: false,
     }));
 
+    // HlsVideo owns physical play/pause and audio settings. Ready is purely
+    // presentation; it must never turn a hydrated pause into a business play.
+    if (isHlsUrl(expectedUrl)) {
+      onVideoReady();
+      return;
+    }
+
     if (backupVideoRef.current) {
       try {
         backupVideoRef.current.volume = volume / 100;
-        backupVideoRef.current.muted = false;
+        backupVideoRef.current.muted = volumeRef.current === 0;
 
         devLog(
           "Backup video audio settings: volume =",
@@ -344,6 +364,7 @@ export function useBackupVideo({
     }
 
     setTimeout(() => {
+      if (!isCurrent()) return;
       onVideoReady();
 
       // Auto play backup video and hide YouTube player
@@ -356,7 +377,7 @@ export function useBackupVideo({
         backupVideoRef.current.volume = volume / 100;
 
         // Đảm bảo video không bị tắt tiếng
-        backupVideoRef.current.muted = false;
+        backupVideoRef.current.muted = volumeRef.current === 0;
 
         backupVideoRef.current
           .play()
@@ -369,9 +390,10 @@ export function useBackupVideo({
             document.addEventListener(
               "click",
               () => {
+                if (!isCurrent()) return;
                 if (backupVideoRef.current) {
                   backupVideoRef.current.volume = volume / 100;
-                  backupVideoRef.current.muted = false;
+                  backupVideoRef.current.muted = volumeRef.current === 0;
                   backupVideoRef.current
                     .play()
                     .catch((e) =>
@@ -387,7 +409,7 @@ export function useBackupVideo({
           });
       }
     }, 100); // Giảm delay xuống 100ms để bắt đầu phát nhanh hơn
-  }, [socket, onVideoReady, volume]);
+  }, [socket, onVideoReady, volume, backupState.backupUrl, videoId, roomId]);
 
   // Handler for backup video error
   const handleVideoError = useCallback(

@@ -86,12 +86,32 @@ const VideoPlayer = () => {
     };
   }, [hlsVideoId]);
 
-  const [videoState, setVideoState] = useState<VideoState>({
+  const [videoState, commitVideoState] = useState<VideoState>({
     nowPlayingData: null,
     currentVideoId: "",
     isPaused: true,
     isBuffering: false,
   });
+  // Socket handlers update this ref synchronously, before React can rerender.
+  const playbackStateRef = useRef(videoState);
+  const authorityRevisionRef = useRef(0);
+  const setVideoState = useCallback(
+    (update: VideoState | ((prev: VideoState) => VideoState)) => {
+      const previous = playbackStateRef.current;
+      const next = typeof update === "function" ? update(previous) : update;
+      // Loading/readiness updates are presentation, not newer room observations.
+      if ((previous.nowPlayingData || next.nowPlayingData) && (
+        previous.currentVideoId !== next.currentVideoId ||
+        previous.nowPlayingData !== next.nowPlayingData ||
+        previous.isPaused !== next.isPaused
+      )) {
+        authorityRevisionRef.current += 1;
+      }
+      playbackStateRef.current = next;
+      commitVideoState(next);
+    },
+    [],
+  );
   const [hlsFinished, setHlsFinished] = useState(false);
   const songEndedForRef = useRef("");
 
@@ -139,50 +159,27 @@ const VideoPlayer = () => {
     onVideosOn: () => {},
   });
 
-  // check_now_playing is answered by the backend as now_playing_status.
-  // Use it to hydrate state even when REST is unavailable or stale.
+  // Even a delayed clear (or same-song notification) supersedes an in-flight REST read.
   useEffect(() => {
     if (!socket) return;
-
-    const handleNowPlayingStatus = (payload: {
-      isPlaying?: boolean;
-      data?: NowPlayingData | null;
-    }) => {
-      const data = payload?.data;
-      if (!data?.video_id) return;
-
-      devLog("Received now_playing_status:", data.video_id);
-      hydratePauseAfterPlayRef.current = payload.isPlaying === false;
-      hydrateSeekTimeRef.current = data.currentTime || 0;
-      setIsChangingSong(true);
-      setVideoState((prev) => ({
-        ...prev,
-        nowPlayingData: data,
-        currentVideoId: data.video_id,
-        isBuffering: true,
-        isPaused: payload.isPlaying === false,
-      }));
-
-      if (!isHlsOnlyMode && !data.hls_url) {
-        playerRef.current?.loadVideoById?.({
-          videoId: data.video_id,
-          startSeconds:
-            payload.isPlaying === false
-              ? Math.max(0, data.currentTime || 0)
-              : Math.max(
-                  0,
-                  (data.currentTime || 0) +
-                    (Date.now() - (data.timestamp || Date.now())) / 1000,
-                ),
-        });
-      }
+    const invalidate = () => { authorityRevisionRef.current += 1; };
+    const songEvents = ["current_song", "play_song", "now_playing"];
+    const invalidateSong = (data: NowPlayingData | null) => {
+      if (typeof data?.video_id === "string" && data.video_id) invalidate();
     };
-
-    socket.on("now_playing_status", handleNowPlayingStatus);
+    const invalidateStatus = (payload: { data?: NowPlayingData | null } | null) => {
+      if (payload?.data === null) invalidate();
+      else invalidateSong(payload?.data ?? null);
+    };
+    songEvents.forEach((event) => socket.on(event, invalidateSong));
+    socket.on("now_playing_status", invalidateStatus);
+    socket.on("now_playing_cleared", invalidate);
     return () => {
-      socket.off("now_playing_status", handleNowPlayingStatus);
+      songEvents.forEach((event) => socket.off(event, invalidateSong));
+      socket.off("now_playing_status", invalidateStatus);
+      socket.off("now_playing_cleared", invalidate);
     };
-  }, [socket, roomId, isHlsOnlyMode]);
+  }, [socket]);
 
   useEffect(() => {
     if (!socket) return;
@@ -282,8 +279,9 @@ const VideoPlayer = () => {
     socket,
     initialBackupUrl: catalogHlsUrl || hlsStreamUrl,
     onVideoReady: () => {
-      if (isHlsOnlyMode) {
-        setVideoState((prev) => ({ ...prev, isPaused: false }));
+      if (isHlsOnlyMode || isHlsUrl(backupState.backupUrl)) {
+        setIsChangingSong(false);
+        setVideoState((prev) => ({ ...prev, isBuffering: false }));
         return;
       }
 
@@ -330,6 +328,54 @@ const VideoPlayer = () => {
   }, [hlsVideoId, hlsStreamUrl, setBackupState]);
 
   const activeHlsUrl = isHlsOnlyMode ? hlsStreamUrl : backupState.backupUrl;
+  const isManagedHls = isHlsUrl(activeHlsUrl);
+  // Initial seek belongs to the queue-entry identity, not each reconnect/render.
+  const hlsStartRef = useRef({ key: "", position: 0, canonicalTime: 0 });
+  if (hlsStartRef.current.key !== activePlaybackKey || (!backupState.backupVideoReady && hlsStartRef.current.canonicalTime !== (videoState.nowPlayingData?.currentTime || 0))) {
+    const data = videoState.nowPlayingData;
+    hlsStartRef.current = {
+      key: activePlaybackKey,
+      canonicalTime: data?.currentTime || 0,
+      position: data ? Math.max(0, (data.currentTime || 0) + (videoState.isPaused ? 0 : Math.max(0, Date.now() - data.timestamp) / 1000)) : 0,
+    };
+  }
+
+  const applyHydration = useCallback((data: NowPlayingData | null, shouldPlay: boolean) => {
+    const previous = playbackStateRef.current;
+    if (!data) {
+      hydratePauseAfterPlayRef.current = false;
+      hydrateSeekTimeRef.current = 0;
+      setIsChangingSong(false);
+      setVideoState({ nowPlayingData: null, currentVideoId: "", isPaused: true, isBuffering: false });
+      if (!isHlsOnlyMode) setBackupState({ backupUrl: "", isLoadingBackup: false, backupError: false, backupVideoReady: false, youtubeError: false });
+      return;
+    }
+    const sameSong = !!previous.nowPlayingData && songPlaybackKey(previous.nowPlayingData) === songPlaybackKey(data);
+    const song = sameSong ? { ...previous.nowPlayingData, ...data, hls_url: data.hls_url || previous.nowPlayingData?.hls_url } : data;
+    hydratePauseAfterPlayRef.current = !shouldPlay;
+    hydrateSeekTimeRef.current = song.currentTime || 0;
+    if (!sameSong) setIsChangingSong(true);
+    setVideoState({ ...previous, nowPlayingData: song, currentVideoId: song.video_id, isPaused: !shouldPlay, isBuffering: sameSong ? previous.isBuffering : true });
+    if (!isHlsOnlyMode) setBackupState((prev) => {
+      const url = song.hls_url || (sameSong ? prev.backupUrl : "");
+      return prev.backupUrl === url ? prev : { backupUrl: url, isLoadingBackup: false, backupError: false, backupVideoReady: false, youtubeError: !!url };
+    });
+    if (!sameSong && !isHlsOnlyMode && !song.hls_url) {
+      playerRef.current?.loadVideoById?.({ videoId: song.video_id, startSeconds: Math.max(0, (song.currentTime || 0) + (shouldPlay ? Math.max(0, Date.now() - song.timestamp) / 1000 : 0)) });
+    }
+  }, [isHlsOnlyMode, setBackupState, setVideoState]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleStatus = (payload: { data?: NowPlayingData | null; isPlaying?: boolean } | null) => {
+      if (!payload || !Object.prototype.hasOwnProperty.call(payload, "data")) return;
+      if (payload.data === null) { applyHydration(null, false); return; }
+      if (typeof payload.data?.video_id !== "string" || !payload.data.video_id) return;
+      applyHydration(payload.data, typeof payload.isPlaying === "boolean" ? payload.isPlaying : !playbackStateRef.current.isPaused);
+    };
+    socket.on("now_playing_status", handleStatus);
+    return () => { socket.off("now_playing_status", handleStatus); };
+  }, [socket, applyHydration]);
 
   // Catalog HLS từ BE là nguồn phát chính; chỉ dùng local-worker resolver khi
   // backend chưa trả hls_url và YouTube cần fallback.
@@ -400,72 +446,23 @@ const VideoPlayer = () => {
     }
   }, [queuedVideoId, activeHlsUrl, hlsFinished, volume]);
 
-  // Khi vào phòng: GET now-playing để đồng bộ bài + play/pause với server.
+  // REST is only a bootstrap fallback; any newer authoritative observation wins.
   useEffect(() => {
     if (!roomId) return;
     let cancelled = false;
-
-    (async () => {
-      const result = await fetchRoomNowPlaying(roomId);
-      if (cancelled || !result?.nowPlaying?.video_id) return;
-
-      if (!result.shouldPlay) {
-        hydratePauseAfterPlayRef.current = true;
-        hydrateSeekTimeRef.current = result.nowPlaying.currentTime;
-      } else {
-        hydratePauseAfterPlayRef.current = false;
-      }
-
-      setIsChangingSong(true);
-      if (!isHlsOnlyMode) {
-        setBackupState({
-          backupUrl: "",
-          isLoadingBackup: false,
-          backupError: false,
-          backupVideoReady: false,
-          youtubeError: false,
-        });
-      }
-
-      setVideoState((prev) => ({
-        ...prev,
-        nowPlayingData: result.nowPlaying,
-        currentVideoId: result.nowPlaying.video_id,
-        isBuffering: true,
-        isPaused: !result.shouldPlay,
-      }));
-
-      try {
-        const elapsed = (Date.now() - result.nowPlaying.timestamp) / 1000;
-        const startTime = result.shouldPlay
-          ? Math.max(0, result.nowPlaying.currentTime + elapsed)
-          : Math.max(0, result.nowPlaying.currentTime);
-
-        if (!isHlsOnlyMode && !result.nowPlaying.hls_url && playerRef.current?.loadVideoById) {
-          try {
-            playerRef.current.unMute?.();
-          } catch {
-            // ignore
-          }
-          playerRef.current.loadVideoById({
-            videoId: result.nowPlaying.video_id,
-            startSeconds: startTime,
-          });
-        }
-      } catch {
-        // Player có thể chưa sẵn — YouTubePlayerIframe sẽ load theo props.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [roomId, isHlsOnlyMode, setBackupState]);
+    const revision = authorityRevisionRef.current;
+    void fetchRoomNowPlaying(roomId).then((result) => {
+      if (cancelled || authorityRevisionRef.current !== revision || !result?.nowPlaying?.video_id) return;
+      applyHydration(result.nowPlaying, result.shouldPlay);
+    });
+    return () => { cancelled = true; };
+  }, [roomId, applyHydration]);
 
   const { handleVideoEnd } = useVideoEvents({
     socket,
     roomId,
     videoState,
+    playbackStateRef,
     setVideoState,
     setIsChangingSong,
     playerRef,
@@ -615,6 +612,7 @@ const VideoPlayer = () => {
       activeHlsUrl,
       hlsFinished,
       queuedVideoId,
+      setVideoState,
     ],
   );
 
@@ -799,6 +797,7 @@ const VideoPlayer = () => {
       activeHlsUrl,
       queuedVideoId,
       hlsFinished,
+      setVideoState,
     ],
   );
 
@@ -1106,7 +1105,7 @@ const VideoPlayer = () => {
         connectionAttempts={socketStatus.connectionAttempts}
       />
 
-      {(backupState.isLoadingBackup || isChangingSong) && (
+      {!isManagedHls && (backupState.isLoadingBackup || isChangingSong) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-50">
           <div className="rounded-full h-16 w-16 border-t-4 border-white mx-auto mb-4">
             <img src={logo} alt="logo" className="w-full h-full" />
@@ -1122,6 +1121,8 @@ const VideoPlayer = () => {
               ref={backupVideoRef}
               url={activeHlsUrl}
               playbackKey={activePlaybackKey}
+              desiredPlaying={isHlsOnlyMode || !videoState.isPaused}
+              initialPosition={hlsStartRef.current.position}
               volume={volume}
               onLoadedData={onBackupVideoLoaded}
               onEnded={onVideoEnd}
@@ -1187,7 +1188,7 @@ const VideoPlayer = () => {
         </div>
       )}
 
-      {backupState.youtubeError && !backupState.backupVideoReady && (
+      {!isManagedHls && backupState.youtubeError && !backupState.backupVideoReady && (
         <div className="absolute inset-0 bg-black z-40" />
       )}
 
@@ -1201,7 +1202,7 @@ const VideoPlayer = () => {
       </button>
 
       {/* Pause overlay — bg đen mờ thuần, KHÔNG dùng backdrop-blur. */}
-      {videoState.isPaused && hasActiveSong && videoState.nowPlayingData && (
+      {!isManagedHls && videoState.isPaused && hasActiveSong && videoState.nowPlayingData && (
         <>
           <div className="absolute inset-0 z-[25] bg-black/50" />
           <PauseOverlay nowPlayingData={videoState.nowPlayingData} />
@@ -1222,7 +1223,7 @@ const VideoPlayer = () => {
         onClick={openRoomModal}
       />
 
-      {backupState.youtubeError &&
+      {!isManagedHls && backupState.youtubeError &&
         !backupState.backupVideoReady &&
         !backupState.isLoadingBackup &&
         backupState.backupError &&
@@ -1237,7 +1238,7 @@ const VideoPlayer = () => {
           </div>
         )}
 
-      {backupState.youtubeError &&
+      {!isManagedHls && backupState.youtubeError &&
         !backupState.backupVideoReady &&
         backupState.isLoadingBackup &&
         !IS_DEV && (

@@ -5,6 +5,7 @@ import { PlaySongEvent, VideoEvent, VideoState } from "../types";
 import { FALLBACK_VIDEO_ID } from "../constants";
 import { transitionBackupState, songPlaybackKey } from "../hlsTransitionState";
 import { devError, devLog } from "@/utils/devLog";
+import { isHlsUrl } from "../../../utils/hls";
 
 const TIME_UPDATE_INTERVAL_MS = 2500;
 const TIME_UPDATE_FORCE_EMIT_MS = 5000;
@@ -35,6 +36,7 @@ interface UseVideoEventsProps {
   socket: typeof Socket | null;
   roomId: string;
   videoState: VideoState;
+  playbackStateRef?: React.MutableRefObject<VideoState>;
   setVideoState: React.Dispatch<React.SetStateAction<VideoState>>;
   setIsChangingSong: React.Dispatch<React.SetStateAction<boolean>>;
   playerRef: React.RefObject<YouTubePlayerRef>;
@@ -51,6 +53,7 @@ export function useVideoEvents({
   socket,
   roomId,
   videoState,
+  playbackStateRef,
   setVideoState,
   setIsChangingSong,
   playerRef,
@@ -62,7 +65,8 @@ export function useVideoEvents({
   hlsOnlyMode = false,
 }: UseVideoEventsProps) {
   // Create refs to store the latest values without triggering re-renders
-  const videoStateRef = useRef(videoState);
+  const localVideoStateRef = useRef(videoState);
+  const videoStateRef = playbackStateRef || localVideoStateRef;
   const roomIdRef = useRef(roomId);
   const backupStateRef = useRef(backupState);
   const socketRef = useRef(socket);
@@ -83,7 +87,7 @@ export function useVideoEvents({
     roomIdRef.current = roomId;
     backupStateRef.current = backupState;
     socketRef.current = socket;
-  }, [videoState, roomId, backupState, socket]);
+  }, [videoState, videoStateRef, roomId, backupState, socket]);
 
   // A second queue entry may have the same HLS URL. The mounted video then
   // stays mounted, so it cannot emit a new load/ready event for that entry.
@@ -95,7 +99,7 @@ export function useVideoEvents({
     );
     backupStateRef.current = state;
     setBackupState(state);
-    if (replayMountedVideo && backupVideoRef.current) {
+    if (replayMountedVideo && backupVideoRef.current && !isHlsUrl(url)) {
       try {
         backupVideoRef.current.currentTime = 0;
         void backupVideoRef.current.play().catch((error) =>
@@ -121,8 +125,8 @@ export function useVideoEvents({
 
       // Check if song is different from current
       if (
-        !videoStateRef.current.nowPlayingData?.video_id ||
-        videoStateRef.current.nowPlayingData.video_id !== data.video_id
+        !videoStateRef.current.nowPlayingData ||
+        songPlaybackKey(videoStateRef.current.nowPlayingData) !== songPlaybackKey(data)
       ) {
         setIsChangingSong(true);
 
@@ -171,7 +175,7 @@ export function useVideoEvents({
     return () => {
       socket.off("current_song", handleCurrentSong);
     };
-  }, [socket, applySongBackup, hlsOnlyMode, playerRef, setIsChangingSong, setVideoState]);
+  }, [socket, applySongBackup, hlsOnlyMode, playerRef, setIsChangingSong, setVideoState, videoStateRef]);
 
   // Handle play song and video events
   useEffect(() => {
@@ -181,6 +185,8 @@ export function useVideoEvents({
     const handlePlaySong = (data: PlaySongEvent) => {
       devLog("Received play song:", data);
       if (!data?.video_id) return;
+      const currentSong = videoStateRef.current.nowPlayingData;
+      if (currentSong && songPlaybackKey(currentSong) === songPlaybackKey(data)) return;
 
       if (clearNowPlayingTimerRef.current) {
         clearTimeout(clearNowPlayingTimerRef.current);
@@ -231,6 +237,20 @@ export function useVideoEvents({
 
       const currentVideoId = videoStateRef.current.nowPlayingData?.video_id;
       if (!currentVideoId || data?.videoId !== currentVideoId) return;
+      if (!["play", "pause", "seek"].includes(data.event)) return;
+      const previous = videoStateRef.current;
+      const updated = { ...previous,
+        nowPlayingData: previous.nowPlayingData ? { ...previous.nowPlayingData, currentTime: data.currentTime } : null,
+        isPaused: data.event === "seek" ? previous.isPaused : data.event === "pause",
+      };
+      videoStateRef.current = updated;
+      setVideoState(updated);
+
+      // HlsVideo owns physical play/pause, even while its media ref is mounting.
+      if (isHlsUrl(previous.nowPlayingData?.hls_url || backupStateRef.current.backupUrl)) {
+        if (backupVideoRef.current && Number.isFinite(data.currentTime)) backupVideoRef.current.currentTime = Math.max(0, data.currentTime);
+        return;
+      }
 
       // Catalog HLS is authoritative. Do not let a socket event fall through
       // to YouTube while the HLS element is mounting.
@@ -382,11 +402,19 @@ export function useVideoEvents({
     // The backend emits now_playing after queue transitions. Normalize it to
     // the same path as play_song so HLS and YouTube receive identical state.
     const handleNowPlaying = (data: PlaySongEvent | null) => {
-      if (!data?.video_id) {
+      if (data === null) {
         handleNowPlayingCleared();
         return;
       }
+      if (!data?.video_id) return;
       handlePlaySong(data);
+    };
+
+    const cancelClearOnStatus = (payload: { data?: { video_id?: string } | null }) => {
+      if ((payload?.data === null || payload?.data?.video_id) && clearNowPlayingTimerRef.current) {
+        clearTimeout(clearNowPlayingTimerRef.current);
+        clearNowPlayingTimerRef.current = null;
+      }
     };
 
     // Register event listeners
@@ -395,6 +423,7 @@ export function useVideoEvents({
     socket.on("playback_event", handlePlaybackEvent);
     socket.on("now_playing", handleNowPlaying);
     socket.on("now_playing_cleared", handleNowPlayingCleared);
+    socket.on("now_playing_status", cancelClearOnStatus);
 
     return () => {
       socket.off("play_song", handlePlaySong);
@@ -402,12 +431,13 @@ export function useVideoEvents({
       socket.off("playback_event", handlePlaybackEvent);
       socket.off("now_playing", handleNowPlaying);
       socket.off("now_playing_cleared", handleNowPlayingCleared);
+      socket.off("now_playing_status", cancelClearOnStatus);
       if (clearNowPlayingTimerRef.current) {
         clearTimeout(clearNowPlayingTimerRef.current);
         clearNowPlayingTimerRef.current = null;
       }
     };
-  }, [socket, applySongBackup, hlsOnlyMode, backupVideoRef, playerRef, setBackupState, setIsChangingSong, setVideoState]);
+  }, [socket, applySongBackup, hlsOnlyMode, backupVideoRef, playerRef, setBackupState, setIsChangingSong, setVideoState, videoStateRef]);
 
   // Video end handler
   const handleVideoEnd = useCallback(() => {
@@ -449,9 +479,9 @@ export function useVideoEvents({
     }
   }, [
     backupVideoRef,
-    playerRef,
     handleBackupVideoEnd,
     onSongEnded,
+    videoStateRef,
   ]);
 
   // Handle time updates - cải thiện logic sync và giảm overhead
@@ -467,7 +497,9 @@ export function useVideoEvents({
     if (backupState.backupUrl && backupVideoRef.current) {
       const currentTime = backupVideoRef.current.currentTime;
       const rawDuration = backupVideoRef.current.duration;
-      const duration = rawDuration ? Math.max(0, rawDuration - 1.5) : 0;
+      // Metadata is absent again while HLS starts/reloads; zero/NaN is not EOF.
+      if (!Number.isFinite(rawDuration) || rawDuration <= 0 || !Number.isFinite(currentTime) || currentTime < 0) return;
+      const duration = Math.max(0, rawDuration - 1.5);
       const isPlaying = !backupVideoRef.current.paused;
 
       if (currentTime >= duration) {
@@ -579,7 +611,7 @@ export function useVideoEvents({
     } catch (error) {
       devError("Error accessing YouTube player methods:", error);
     }
-  }, [backupVideoRef, playerRef, handleBackupVideoEnd]);
+  }, [backupVideoRef, playerRef, handleBackupVideoEnd, videoStateRef]);
 
   // Set up time update interval ổn định, đủ thưa để không spam postMessage vào iframe.
   useEffect(() => {
@@ -663,7 +695,7 @@ export function useVideoEvents({
         devError("Error in handleStateChange:", error);
       }
     },
-    [setIsChangingSong, setVideoState, handleVideoEnd]
+    [setIsChangingSong, setVideoState, handleVideoEnd, playerRef]
   );
 
   return {
