@@ -132,14 +132,14 @@ const VideoPlayer = () => {
 
   const { socket, socketStatus, isVideoOff } = useSocketConnection({
     roomId,
-    onConnect: () => {
-      socket?.emit("request_current_song", { roomId });
+    onConnect: (connectedSocket) => {
+      connectedSocket.emit("check_now_playing", { roomId });
     },
     onVideosOff: () => {},
     onVideosOn: () => {},
   });
 
-  // request_current_song is answered by the backend as now_playing_status.
+  // check_now_playing is answered by the backend as now_playing_status.
   // Use it to hydrate state even when REST is unavailable or stale.
   useEffect(() => {
     if (!socket) return;
@@ -179,9 +179,6 @@ const VideoPlayer = () => {
     };
 
     socket.on("now_playing_status", handleNowPlayingStatus);
-    if (roomId && socket.connected) {
-      socket.emit("request_current_song", { roomId });
-    }
     return () => {
       socket.off("now_playing_status", handleNowPlayingStatus);
     };
@@ -995,7 +992,7 @@ const VideoPlayer = () => {
         backupError: false,
       }));
       if (videoState.nowPlayingData?.video_id && roomId && socket?.connected) {
-        socket.emit("request_current_song", { roomId });
+        socket.emit("check_now_playing", { roomId });
       }
     }, 30000);
     return () => clearTimeout(resetTimeout);
