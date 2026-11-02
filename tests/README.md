@@ -1,4 +1,4 @@
-# Socket reconnect regression tests
+# Playback and socket regression tests
 
 Run from the repository root with the existing dependencies:
 
@@ -77,3 +77,36 @@ Final local run: **17 passed, 0 failed, 0 skipped** (13 fixture/contract cases,
 and large-chunk warnings. Full lint passed with two warnings in untouched
 `useVideoEvents.ts` (lines 450 and 666); changed production files lint clean.
 `git diff --check` passed. No commit, push, deploy or environment/secret changes.
+
+## Sampled playback clock and HLS source ownership
+
+`timestamp` identifies a queue entry; it is **not** the sampling clock for an
+already elapsed `currentTime`. The backend supplies `position_timestamp` alongside
+`currentTime` and `isPlaying` in now-playing snapshots. REST and all socket aliases
+must restore the sampled position exactly once. Legacy snapshots lacking the new
+clock use their received position, without adding elapsed queue age. Remote seek
+updates the sampling clock without changing queue identity.
+
+The backend prefers observed media progress over queue wall time, keeps paused
+positions fixed, rejects samples from an older queue entry, and does not extrapolate
+an unreported gap longer than five seconds. This prevents buffering/pause from
+turning into a fabricated end-of-song snapshot.
+
+When HLS/progressive is selected, YouTube is unmounted even during loading/retry.
+Unmount explicitly destroys the API player, clears its parent ref and rejects late
+callbacks. Its React-owned host survives effect cleanup/setup replay while YouTube
+owns only an imperative child iframe. Consecutive HLS songs do not mount YouTube;
+waiting or a YouTube-only song mounts it again. Within consecutive YouTube songs,
+the existing iframe is reused. Initial autoplay is disabled; the active source
+owner authorizes playback. HLS interrupted `play()` promises
+(`AbortError`) are handled by the existing bounded watchdog, not an immediate
+terminal error. Real playback/permission errors retain manual retry. Out-of-range
+resume positions are clamped just before finite media EOF; **only a real media end
+after data readiness** advances the queue, never metadata alone.
+
+Relevant fixtures: `now-playing-clock.test.cjs`, `player-hydration.test.cjs`,
+`youtube-source-ownership.test.cjs`, `hls-playback.test.cjs`, and
+`hls-timeupdate.test.cjs`. They execute production modules with fixture media/React
+APIs; they do not prove browser decoding, physical-TV playback or a running API's
+adoption of the changed backend. The isolated producer regression is
+`be-ezinn/src/services/roomMusic.clock.test.ts`; it does not load live Redis/DB.

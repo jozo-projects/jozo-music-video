@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { PlaySongEvent, VideoEvent, VideoState } from "../types";
 import { FALLBACK_VIDEO_ID } from "../constants";
+import { playbackPosition } from "../playbackPosition";
 import { transitionBackupState, songPlaybackKey } from "../hlsTransitionState";
 import { devError, devLog } from "@/utils/devLog";
 import { isHlsUrl } from "../../../utils/hls";
@@ -141,7 +142,7 @@ export function useVideoEvents({
           },
           currentVideoId: data.video_id,
           isBuffering: true,
-          isPaused: false,
+          isPaused: data.isPlaying === false,
         }));
 
         // Apply catalog HLS without hiding an already-ready video when the
@@ -159,8 +160,7 @@ export function useVideoEvents({
           }
 
           // Calculate current time based on timestamp
-          const elapsedTime = (Date.now() - data.timestamp) / 1000;
-          const startTime = data.currentTime + elapsedTime;
+          const startTime = playbackPosition(data, data.isPlaying !== false);
 
           playerRef.current.loadVideoById({
             videoId: data.video_id,
@@ -182,7 +182,7 @@ export function useVideoEvents({
     if (!socket) return;
 
     // Handle play_song event
-    const handlePlaySong = (data: PlaySongEvent) => {
+    const handlePlaySong = (data: PlaySongEvent, restoreSnapshot = false) => {
       devLog("Received play song:", data);
       if (!data?.video_id) return;
       const currentSong = videoStateRef.current.nowPlayingData;
@@ -201,11 +201,12 @@ export function useVideoEvents({
         ...prev,
         nowPlayingData: {
           ...data,
-          currentTime: 0, // Reset currentTime for new song
+          currentTime: restoreSnapshot ? data.currentTime || 0 : 0,
+          position_timestamp: restoreSnapshot ? data.position_timestamp : Date.now(),
         },
         currentVideoId: data.video_id,
         isBuffering: true,
-        isPaused: false,
+        isPaused: restoreSnapshot && data.isPlaying === false,
       }));
 
       // Same HLS URL stays mounted; preserve readiness and replay it from zero.
@@ -224,7 +225,7 @@ export function useVideoEvents({
 
         playerRef.current.loadVideoById({
           videoId: data.video_id,
-          startSeconds: 0, // Start from beginning
+          startSeconds: restoreSnapshot ? playbackPosition(data, data.isPlaying !== false) : 0,
         });
       }
     };
@@ -240,7 +241,7 @@ export function useVideoEvents({
       if (!["play", "pause", "seek"].includes(data.event)) return;
       const previous = videoStateRef.current;
       const updated = { ...previous,
-        nowPlayingData: previous.nowPlayingData ? { ...previous.nowPlayingData, currentTime: data.currentTime } : null,
+        nowPlayingData: previous.nowPlayingData ? { ...previous.nowPlayingData, currentTime: data.currentTime, position_timestamp: Date.now() } : null,
         isPaused: data.event === "seek" ? previous.isPaused : data.event === "pause",
       };
       videoStateRef.current = updated;
@@ -407,7 +408,7 @@ export function useVideoEvents({
         return;
       }
       if (!data?.video_id) return;
-      handlePlaySong(data);
+      handlePlaySong(data, true);
     };
 
     const cancelClearOnStatus = (payload: { data?: { video_id?: string } | null }) => {

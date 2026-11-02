@@ -22,7 +22,7 @@ function fixture(options = {}) {
     addEventListener(e, fn) { if (!this.listeners.has(e)) this.listeners.set(e, new Set()); this.listeners.get(e).add(fn); }
     removeEventListener(e, fn) { this.listeners.get(e)?.delete(fn); }
     emit(e) { for (const fn of [...(this.listeners.get(e) || [])]) fn({ type: e }); }
-    play() { this.plays++; if (options.rejectPlay) return Promise.reject(new Error('blocked')); this.paused = false; return Promise.resolve(); }
+    play() { this.plays++; if (options.rejectPlay) return Promise.reject(options.rejectPlay instanceof Error ? options.rejectPlay : new Error('blocked')); this.paused = false; return Promise.resolve(); }
     pause() { this.paused = true; }
     load() { this.loads++; this._currentTime = 0; this.readyState = 0; }
     removeAttribute() {}
@@ -224,6 +224,34 @@ test('initial loading and recovery feedback are visible until media has data', (
   f.manifest(); assert.ok(f.status()); f.ready(); assert.equal(f.status(), undefined);
   f.advance(8000); assert.ok(f.status()); f.ready(); assert.equal(f.status(), undefined);
 });
+test('an interrupted play request is not exposed as a terminal media failure', async () => {
+  const error = Object.assign(new Error('interrupted by a newer load or pause'), { name: 'AbortError' });
+  const f = fixture({ rejectPlay: error }); f.manifest(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(f.retry(), undefined);
+  f.advance(24000); assert.ok(f.retry()); // Persistent no-progress still has a bounded recovery path.
+});
+test('watchdog replacement leaves exactly one pending watchdog, including after disposal', () => {
+  const f = fixture(); f.advance(8000);
+  assert.equal(f.instances.length, 2);
+  assert.equal(f.timers.size, 1);
+  f.unmount(); assert.equal(f.timers.size, 0);
+});
+test('restored EOF waits for real media/end instead of seeking past finite duration', () => {
+  const f = fixture({ props: { initialPosition: 150, desiredPlaying: true } });
+  f.video.readyState = 1; f.video.emit('loadedmetadata'); f.video.emit('loadedmetadata');
+  assert.equal(f.counts.ended, 0); assert.ok(f.video.currentTime < f.video.duration);
+  f.video.emit('ended'); assert.equal(f.counts.ended, 0);
+  f.manifest(); f.ready(); f.video.currentTime = f.video.duration;
+  f.video.emit('ended'); f.video.emit('ended'); assert.equal(f.counts.ended, 1);
+  const n = f.instances.length; f.advance(32000);
+  assert.equal(f.instances.length, n); assert.equal(f.retry(), undefined);
+});
+test('unknown media duration is not treated as a finished snapshot', () => {
+  const f = fixture({ props: { initialPosition: 150, desiredPlaying: true } });
+  f.video.duration = NaN; f.video.emit('loadedmetadata');
+  assert.equal(f.counts.ended, 0);
+});
+
 test('play rejection exposes manual retry and unmount invalidates pending promise/timer callbacks', async () => {
   const f = fixture({ rejectPlay: true }); f.manifest(); await Promise.resolve(); await Promise.resolve(); assert.ok(f.retry());
   f.unmount(); const n = f.instances.length; f.advance(80000); assert.equal(f.instances.length, n);

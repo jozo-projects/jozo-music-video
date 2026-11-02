@@ -16,6 +16,12 @@ function fixture(video) {
     module, exports: module.exports,
     require(name) {
       if (name === 'react') return { useRef: (current) => ({ current }), useCallback: (fn) => fn, useEffect() {} };
+      if (name.includes('playbackPosition')) {
+        const helper = { exports: {} };
+        const compiled = ts.transpileModule(fs.readFileSync('src/components/video/playbackPosition.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+        vm.runInNewContext(compiled, { module: helper, exports: helper.exports, Date });
+        return helper.exports;
+      }
       if (name.includes('constants')) return { FALLBACK_VIDEO_ID: 'waiting' };
       if (name.includes('hlsTransitionState')) return { songPlaybackKey: (song) => song.video_id, transitionBackupState() {} };
       if (name.includes('utils/hls')) return { isHlsUrl: (url) => url.includes('.m3u8') };

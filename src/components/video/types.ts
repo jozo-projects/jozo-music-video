@@ -8,6 +8,9 @@ export interface NowPlayingData {
   author: string;
   duration: number;
   timestamp: number;
+  /** Snapshot clock for currentTime, separate from the queue-entry timestamp. */
+  position_timestamp?: number;
+  isPlaying?: boolean;
   currentTime: number;
   hls_url?: string;
   media_id?: string;
@@ -33,6 +36,9 @@ export interface PlaySongEvent {
   duration: number;
   currentTime: number;
   timestamp: number;
+  /** Snapshot clock for currentTime, separate from the queue-entry timestamp. */
+  position_timestamp?: number;
+  isPlaying?: boolean;
   hls_url?: string;
   media_id?: string;
   media_status?: string;

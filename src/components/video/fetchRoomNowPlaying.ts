@@ -81,6 +81,7 @@ function toNowPlaying(obj: Record<string, unknown>): NowPlayingData | null {
     duration,
     currentTime,
     timestamp,
+    position_timestamp: Number.isFinite(obj.position_timestamp) ? Number(obj.position_timestamp) : Date.now(),
     ...(hls_url ? { hls_url } : {}),
     ...(media_id ? { media_id } : {}),
     ...(media_status ? { media_status } : {}),
@@ -127,17 +128,7 @@ export async function fetchRoomNowPlaying(
 
     const shouldPlay = parseShouldPlay(obj);
 
-    if (!shouldPlay) {
-      return {
-        nowPlaying: {
-          ...nowPlaying,
-          timestamp: Date.now(),
-        },
-        shouldPlay: false,
-      };
-    }
-
-    return { nowPlaying, shouldPlay: true };
+    return { nowPlaying, shouldPlay };
   } catch (error) {
     devError("GET now-playing failed:", error);
     return null;

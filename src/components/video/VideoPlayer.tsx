@@ -6,6 +6,7 @@ import { RecordingStudio } from "../../RecordingStudio";
 import { FALLBACK_VIDEO_ID } from "./constants";
 import { fetchRoomNowPlaying } from "./fetchRoomNowPlaying";
 import { songPlaybackKey } from "./hlsTransitionState";
+import { playbackPosition } from "./playbackPosition";
 import { useBackupVideo } from "./hooks/useBackupVideo";
 import { useSocketConnection } from "./hooks/useSocketConnection";
 import { useVideoEvents } from "./hooks/useVideoEvents";
@@ -336,7 +337,7 @@ const VideoPlayer = () => {
     hlsStartRef.current = {
       key: activePlaybackKey,
       canonicalTime: data?.currentTime || 0,
-      position: data ? Math.max(0, (data.currentTime || 0) + (videoState.isPaused ? 0 : Math.max(0, Date.now() - data.timestamp) / 1000)) : 0,
+      position: playbackPosition(data, !videoState.isPaused),
     };
   }
 
@@ -361,7 +362,7 @@ const VideoPlayer = () => {
       return prev.backupUrl === url ? prev : { backupUrl: url, isLoadingBackup: false, backupError: false, backupVideoReady: false, youtubeError: !!url };
     });
     if (!sameSong && !isHlsOnlyMode && !song.hls_url) {
-      playerRef.current?.loadVideoById?.({ videoId: song.video_id, startSeconds: Math.max(0, (song.currentTime || 0) + (shouldPlay ? Math.max(0, Date.now() - song.timestamp) / 1000 : 0)) });
+      playerRef.current?.loadVideoById?.({ videoId: song.video_id, startSeconds: playbackPosition(song, shouldPlay) });
     }
   }, [isHlsOnlyMode, setBackupState, setVideoState]);
 
@@ -411,8 +412,8 @@ const VideoPlayer = () => {
     setHlsFinished(false);
   }, [activeHlsUrl, activePlaybackKey]);
 
-  // YouTube luôn được mount để nhạc chờ phát được ngay khi phòng rảnh.
-  // Trong lúc HLS đang phát bài, iframe này bị pause + mute.
+  // YouTube is unmounted while HLS/progressive owns the source.
+  // Resume waiting music only when its iframe is available again.
   useEffect(() => {
     const player = playerRef.current;
     if (!player?.playVideo) return;
@@ -756,11 +757,7 @@ const VideoPlayer = () => {
 
       try {
         if (np) {
-          const serverTimestamp = np.timestamp;
-          const serverCurrentTime = np.currentTime;
-          const now = Date.now();
-          const elapsed = (now - serverTimestamp) / 1000;
-          const targetTime = Math.max(0, serverCurrentTime + elapsed);
+          const targetTime = playbackPosition(np, !videoState.isPaused);
           event.target.seekTo(targetTime, true);
         }
         if (activeSong && videoState.isPaused) {
@@ -1037,13 +1034,7 @@ const VideoPlayer = () => {
   // Lúc chờ, iframe nằm trên poster nhưng gần trong suốt để vẫn nghe được và vẫn thấy poster.
   const concealYoutube = backupState.youtubeError || isBackupActive;
 
-  const initialStartSeconds = videoState.nowPlayingData
-    ? Math.max(
-        0,
-        videoState.nowPlayingData.currentTime +
-          (Date.now() - videoState.nowPlayingData.timestamp) / 1000,
-      )
-    : 0;
+  const initialStartSeconds = playbackPosition(videoState.nowPlayingData, !videoState.isPaused);
 
   // Keep non-rendered values referenced in HLS-only mode.
   if (isHlsOnlyMode) {
@@ -1160,23 +1151,22 @@ const VideoPlayer = () => {
 
       {!hasActiveSong && <WelcomeScreen />}
 
-      {/* YouTube: bài trong queue, hoặc nhạc chờ khi phòng rảnh. */}
-      {!!playerVideoId && (
+      {/* Only mount YouTube when no HLS/progressive source is selected,
+          including while that source is loading or retrying. */}
+      {!activeHlsUrl && !!playerVideoId && (
         <div
           className={`absolute top-0 left-0 h-full w-full ${
             idleScreen
               ? "z-[21] opacity-[0.03] pointer-events-none"
-              : activeHlsUrl && hasActiveSong
-                ? "z-0 opacity-0 pointer-events-none"
-                : concealYoutube
-                  ? "z-[5] opacity-0 pointer-events-none"
-                  : "z-[5] opacity-100"
+              : concealYoutube
+                ? "z-[5] opacity-0 pointer-events-none"
+                : "z-[5] opacity-100"
           }`}
         >
           <MemoYouTubePlayerIframe
             playerRef={playerRef}
             videoId={playerVideoId}
-            isFallback={idleScreen || Boolean(activeHlsUrl && hasActiveSong)}
+            isFallback={idleScreen}
             startSeconds={
               playerVideoId === FALLBACK_VIDEO_ID ? 0 : initialStartSeconds
             }

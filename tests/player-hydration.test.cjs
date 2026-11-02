@@ -63,7 +63,7 @@ function fixture({ resolvedUrl = '' } = {}) {
         if (name === 'axios') return { get: async () => ({}) };
         if (name === 'socket.io-client') return {};
         const actual = path.resolve(path.dirname(filename), name);
-        for (const ext of ['.ts', '.tsx']) if (fs.existsSync(actual + ext) && (/useBackupVideo|useVideoEvents|hlsTransitionState|nowPlayingHydration|constants/.test(name))) return load(actual + ext);
+        for (const ext of ['.ts', '.tsx']) if (fs.existsSync(actual + ext) && (/useBackupVideo|useVideoEvents|hlsTransitionState|nowPlayingHydration|playbackPosition|constants/.test(name))) return load(actual + ext);
         return new Proxy({ __esModule: true, default: name }, { get: (target, prop) => target[prop] ?? String(prop) });
       },
     }, { filename });
@@ -189,6 +189,61 @@ test('malformed status cannot supersede a valid pending REST snapshot', async ()
   const f = fixture(); f.receive('now_playing_status', { data: {} }); await f.rest(song(), false);
   assert.equal(f.hls()?.props.url, song().hls_url);
 });
+test('hydrated snapshot position is not counted again from the queue start timestamp', async () => {
+  const f = fixture();
+  await f.rest({ ...song('one', 90000), currentTime: 10, position_timestamp: 100000 });
+  assert.equal(f.hls().props.initialPosition, 10);
+  const key = f.hls().props.playbackKey;
+  f.receive('now_playing_status', { data: { ...song('one', 90000), currentTime: 11, position_timestamp: 101000 }, isPlaying: true });
+  assert.equal(f.hls().props.playbackKey, key);
+});
+test('legacy status without a position timestamp uses the received position once', () => {
+  const f = fixture();
+  f.receive('now_playing_status', { data: { ...song('one', 90000), currentTime: 10 }, isPlaying: true });
+  assert.equal(f.hls().props.initialPosition, 10);
+});
+test('playing seek while HLS is loading does not add elapsed queue time', async () => {
+  const f = fixture(); await f.rest({ ...song('one', 90000), position_timestamp: 100000 });
+  f.advance(2000);
+  f.receive('playback_event', { videoId: 'one', event: 'seek', currentTime: 65 });
+  assert.equal(f.hls().props.initialPosition, 65);
+});
+test('HLS excludes YouTube before readiness and across consecutive HLS songs, then restores waiting', async () => {
+  const f = fixture(); await f.rest(song(), false);
+  const youtube = () => f.nodes().find(n => n.props.onPlaybackQualityChange);
+  assert.equal(youtube(), undefined);
+  assert.equal(f.nodes().filter(n => n.type === 'HlsVideo').length, 1);
+  f.hls().props.onLoadedData(); f.render(); assert.equal(youtube(), undefined);
+  f.receive('play_song', song('two')); assert.equal(youtube(), undefined);
+  assert.equal(f.hls().props.url, song('two').hls_url);
+  f.receive('now_playing_status', { data: null, isPlaying: false });
+  assert.ok(youtube()); assert.equal(f.hls(), undefined);
+});
+test('switching from HLS to a YouTube-only song mounts the requested iframe', async () => {
+  const f = fixture(); await f.rest(song());
+  f.receive('play_song', { ...song('youtube'), hls_url: '' });
+  assert.equal(f.hls(), undefined);
+  const youtube = f.nodes().find(n => n.props.onPlaybackQualityChange);
+  assert.equal(youtube.props.videoId, 'youtube');
+});
+
+test('now_playing hydration restores its sampled position and paused state instead of restarting', () => {
+  const f = fixture();
+  f.receive('now_playing', { ...song('one', 90000), currentTime: 40, position_timestamp: 100000, isPlaying: false });
+  assert.equal(f.hls().props.initialPosition, 40); assert.equal(f.hls().props.desiredPlaying, false);
+});
+test('current_song hydration respects a canonical paused state', () => {
+  const f = fixture();
+  f.receive('current_song', { ...song('one', 90000), currentTime: 40, position_timestamp: 100000, isPlaying: false });
+  assert.equal(f.hls().props.initialPosition, 40); assert.equal(f.hls().props.desiredPlaying, false);
+});
+test('YouTube readiness uses the same sampled clock rather than doubling queue elapsed', async () => {
+  const f = fixture(); await f.rest({ ...song('one', 90000), hls_url: '', currentTime: 10, position_timestamp: 100000 }, false);
+  let seek;
+  f.nodes().find(n => n.props.onReady).props.onReady({ target: { unMute() {}, setVolume() {}, seekTo(time) { seek = time; }, pauseVideo() {} } });
+  assert.equal(seek, 10);
+});
+
 test('HLS manual retry is not obscured by parent loading/blackout/pause overlays', async () => {
   const f = fixture(); await f.rest(song(), false);
   const blockers = f.nodes().filter(n => n.type === 'div' && /absolute inset-0/.test(n.props.className || '') && /z-50|z-40|z-\[25\]/.test(n.props.className || ''));

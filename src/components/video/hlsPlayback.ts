@@ -50,14 +50,27 @@ export function createHlsPlayback(options: PlaybackOptions) {
       position = video.currentTime;
     }
   };
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    if (timer !== undefined) clearTimeout(timer);
+    video.pause();
+    options.onLoadingChange?.(false);
+    options.onEnded();
+  };
   const play = (token: number) => {
-    if (!active() || token !== generation || !wanted || !canStart) return;
+    if (!active() || token !== generation || !wanted || !canStart || ended) return;
+    const rejected = (error: unknown) => {
+      if (!active() || token !== generation || !wanted || ended) return;
+      // load()/pause()/a replacement play() may legitimately interrupt play().
+      // The no-progress watchdog still bounds a persistent AbortError stall.
+      if ((error as { name?: string } | null)?.name === "AbortError") return;
+      showRetry("play-rejected");
+    };
     try {
-      void video.play().catch(() => {
-        if (active() && token === generation && wanted) showRetry("play-rejected");
-      });
-    } catch {
-      if (active() && token === generation) showRetry("play-rejected");
+      void video.play().catch(rejected);
+    } catch (error) {
+      rejected(error);
     }
   };
   const recover = (reason: string) => {
@@ -97,6 +110,11 @@ export function createHlsPlayback(options: PlaybackOptions) {
     };
     let restoring = false;
     const restore = () => {
+      // A stale server clock must not seek beyond EOF or synthesize song_ended.
+      // Decode the final media and let its real ended event advance the queue.
+      if (Number.isFinite(video.duration) && video.duration > 0 && position >= video.duration) {
+        position = Math.max(0, video.duration - 0.05);
+      }
       if (!attemptReady && position > 0 && Math.abs(video.currentTime - position) > 0.05) {
         restoring = true;
         try { video.currentTime = position; } catch { /* Retry once data arrives. */ }
@@ -106,6 +124,7 @@ export function createHlsPlayback(options: PlaybackOptions) {
     const dataReady = () => {
       if (video.readyState < 2) return;
       restore();
+      if (!valid() || ended) return;
       // Seeking can synchronously drop HAVE_CURRENT_DATA back to metadata only.
       if (video.readyState < 2) return;
       options.onLoadingChange?.(false);
@@ -137,9 +156,7 @@ export function createHlsPlayback(options: PlaybackOptions) {
       if (!attemptReady || ended) return;
       const atEnd = video.ended || (Number.isFinite(video.duration) && video.duration > 0 && video.currentTime >= video.duration - 0.75);
       if (!atEnd) return;
-      ended = true;
-      if (timer !== undefined) clearTimeout(timer);
-      options.onEnded();
+      finish();
     };
     listen("loadedmetadata", restore);
     listen("loadeddata", dataReady);

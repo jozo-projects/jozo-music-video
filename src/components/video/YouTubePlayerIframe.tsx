@@ -82,6 +82,8 @@ interface YouTubePlayerIframeProps {
   isFallback?: boolean;
   startSeconds?: number;
   showControls?: boolean;
+  /** A retained iframe is inactive while HLS/progressive owns the source. */
+  suspended?: boolean;
 }
 
 /**
@@ -102,6 +104,7 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   isFallback = false,
   startSeconds,
   showControls = false,
+  suspended = false,
 }) => {
   const [apiReady, setApiReady] = useState(apiLoaded);
   const playerInstanceRef = useRef<any>(null);
@@ -109,6 +112,8 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
   const playerReadyRef = useRef(false);
   const videoIdRef = useRef(videoId);
   videoIdRef.current = videoId;
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
 
   // Ref-hoá callback để effect init không phụ thuộc vào hàm parent.
   const onReadyRef = useRef(onReady);
@@ -146,22 +151,30 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
 
   // 2. Khởi tạo player 1 lần khi API sẵn sàng và có videoId.
   useEffect(() => {
-    if (!apiReady || !videoId) return;
+    const initialVideoId = videoIdRef.current;
+    if (!apiReady || !initialVideoId) return;
     if (playerInstanceRef.current || initializingRef.current) return;
 
     const container = document.getElementById(PLAYER_ELEMENT_ID);
     if (!container) return;
 
     initializingRef.current = true;
+    let disposed = false;
 
     try {
-      devLog("Khởi tạo YouTube player:", videoId);
+      devLog("Khởi tạo YouTube player:", initialVideoId);
 
-      const player = new (window as any).YT.Player(PLAYER_ELEMENT_ID, {
-        videoId,
+      // YT replaces/removes its target. Keep React's host intact so cleanup/setup
+      // replay and a future mount always have somewhere to create a fresh iframe.
+      const placeholder = document.createElement("div");
+      container.replaceChildren(placeholder);
+      const player = new (window as any).YT.Player(placeholder, {
+        width: "100%",
+        height: "100%",
+        videoId: initialVideoId,
         host: YOUTUBE_EMBED_HOST,
         playerVars: {
-          autoplay: 1,
+          autoplay: 0, // Parent authorizes playback after ready; never race HLS before ready.
           controls: showControls ? 1 : 0,
           modestbranding: 1,
           rel: 0,
@@ -179,12 +192,13 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
         },
         events: {
           onReady: (event: any) => {
+            if (disposed) return;
             playerReadyRef.current = true;
             try {
               const target = event.target;
               const wanted = videoIdRef.current;
               const current = target.getVideoData?.()?.video_id;
-              if (wanted && current && current !== wanted) {
+              if (!suspendedRef.current && wanted && current && current !== wanted) {
                 target.loadVideoById({
                   videoId: wanted,
                   startSeconds: startSecondsRef.current ?? 0,
@@ -203,9 +217,22 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
             } catch (e) {
               devError("onReady setup error:", e);
             }
+            if (suspendedRef.current) {
+              event.target.mute?.();
+              event.target.pauseVideo?.();
+              return;
+            }
             onReadyRef.current(event);
           },
           onStateChange: (event: any) => {
+            if (disposed) return;
+            if (suspendedRef.current) {
+              if (event?.data === 1 || event?.data === 3) {
+                event.target?.mute?.();
+                event.target?.pauseVideo?.();
+              }
+              return;
+            }
             // YouTube hay bật lại CC khi BUFFERING / PLAYING / CUED.
             const state = event?.data;
             if (state === 1 || state === 3 || state === 5) {
@@ -213,8 +240,9 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
             }
             onStateChangeRef.current(event);
           },
-          onError: (event: any) => onErrorRef.current(event),
+          onError: (event: any) => { if (!disposed && !suspendedRef.current) onErrorRef.current(event); },
           onPlaybackQualityChange: (event: any) => {
+            if (disposed) return;
             onQualityRef.current(event);
             enforcePreferredQualityOnChange(
               isFallbackAtInitRef.current,
@@ -233,12 +261,21 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
       initializingRef.current = false;
     }
 
-    // Không cleanup destroy — giữ 1 player duy nhất cho vòng đời component.
-    // Khi unmount (queue clear), React sẽ remove placeholder div → iframe bị
-    // gỡ theo, destroy thủ công không cần thiết.
-  // startSeconds được đọc từ startSecondsRef (luôn mới nhất) nên không cần
-  // trong deps — tránh re-run effect mỗi khi Date.now() thay đổi.
-  }, [apiReady, videoId, playerRef, showControls]);
+    return () => {
+      // Invalidate queued callbacks before destroy can dispatch any last events.
+      disposed = true;
+      const player = playerInstanceRef.current;
+      playerInstanceRef.current = null;
+      playerReadyRef.current = false;
+      initializingRef.current = false;
+      if (playerRef.current === player) {
+        // @ts-expect-error — clear the same parent ref assigned onReady
+        playerRef.current = null;
+      }
+      try { player?.destroy?.(); } catch (e) { devError("YouTube destroy failed:", e); }
+    };
+    // Song changes use the load effect below, not destroy/recreate.
+  }, [apiReady, playerRef, showControls]);
 
   // 3. Đổi bài → loadVideoById (tái sử dụng iframe, không destroy).
   // Chỉ phụ thuộc videoId — startSeconds lấy từ ref (luôn mới nhất) để tránh
@@ -247,6 +284,11 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
     if (!playerReadyRef.current) return;
     const player = playerInstanceRef.current;
     if (!player || !videoId) return;
+    if (suspended) {
+      player.mute?.();
+      player.pauseVideo?.();
+      return;
+    }
     if (typeof player.loadVideoById !== "function") return;
 
     try {
@@ -260,14 +302,15 @@ const YouTubePlayerIframe: FC<YouTubePlayerIframeProps> = ({
       });
       // CC thường được bật lại sau khi load — ép tắt thêm một nhịp.
       disableCaptions(player);
-      window.setTimeout(() => disableCaptions(player), 500);
+      window.setTimeout(() => {
+        if (playerInstanceRef.current === player) disableCaptions(player);
+      }, 500);
     } catch (e) {
       devError("loadVideoById failed:", e);
     }
-  }, [videoId]);
+  }, [videoId, suspended]);
 
-  // Placeholder div — YT.Player replace element này thành <iframe>.
-  // Style inline cố định → không thay đổi giữa các render.
+  // React owns the stable host; YT owns only its imperative child iframe.
   return <div id={PLAYER_ELEMENT_ID} style={PLAYER_STYLE} />;
 };
 
