@@ -7,6 +7,9 @@ interface RoomSelectModalProps {
   currentRoomId: string;
   onSelect: (roomId: number) => void;
   onClose: () => void;
+  onReconnect?: () => void;
+  reconnectDisabled?: boolean;
+  reconnectMessage?: string;
 }
 
 const RoomSelectModal: React.FC<RoomSelectModalProps> = ({
@@ -14,6 +17,9 @@ const RoomSelectModal: React.FC<RoomSelectModalProps> = ({
   currentRoomId,
   onSelect,
   onClose,
+  onReconnect,
+  reconnectDisabled,
+  reconnectMessage,
 }) => {
   useEffect(() => {
     if (!open) return;
@@ -80,6 +86,10 @@ const RoomSelectModal: React.FC<RoomSelectModalProps> = ({
           })}
         </div>
 
+        {onReconnect && <div className="mt-4 border-t border-white/10 pt-4 text-center">
+          <button type="button" onClick={onReconnect} disabled={reconnectDisabled} className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50">Kết nối lại</button>
+          {reconnectMessage && <p className="mt-2 text-sm text-white/60" role="status">{reconnectMessage}</p>}
+        </div>}
         {currentRoomId ? (
           <p className="mt-4 text-center text-sm text-white/50">
             Phòng hiện tại: {currentRoomId}

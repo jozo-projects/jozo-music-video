@@ -3,6 +3,7 @@ import axios from "axios";
 import { BackupState, BackupVideoProps, VideoEvent } from "../types";
 import React from "react";
 import { devError, devLog } from "@/utils/devLog";
+import { trustedHeaders } from "../deviceApproval";
 import {
   isHlsUrl,
   isLocalHlsFallbackEnabled,
@@ -29,6 +30,7 @@ interface UseBackupVideoReturn {
 export function useBackupVideo({
   videoId,
   roomId,
+  deviceProof,
   volume,
   socket,
   onVideoReady,
@@ -173,7 +175,7 @@ export function useBackupVideo({
       // Kiểm tra biến môi trường
       const baseUrl =
         import.meta.env.VITE_API_BASE_URL ||
-        (import.meta.env.DEV ? "http://localhost:4000" : "");
+        (deviceProof ? window.location.origin : import.meta.env.DEV ? "http://localhost:4000" : "");
       if (!baseUrl) {
         devError(
           "===> ERROR: VITE_API_BASE_URL is not defined in environment variables <===",
@@ -198,7 +200,15 @@ export function useBackupVideo({
       devLog("===> Starting axios request <===");
 
       // Tạo request với timeout dài hơn
-      const response = await axios.get(
+      const headers = deviceProof ? trustedHeaders(backupApiUrl, deviceProof, import.meta.env.VITE_API_BASE_URL) : {};
+      if (deviceProof && !headers["X-Jozo-Device-Proof"]) throw new Error("Untrusted API URL");
+      const response = deviceProof ? await (async () => {
+        const res = await fetch(`${backupApiUrl}?_=${noCache}&debug=true`, {
+          signal: controller.signal, redirect: "error", headers: { ...headers, "Cache-Control": "no-cache", Pragma: "no-cache" },
+        });
+        if (!res.ok) throw new Error("Backup API request failed");
+        return { data: await res.json() };
+      })() : await axios.get(
         `${backupApiUrl}?_=${noCache}&debug=true`,
         {
           signal: controller.signal,
@@ -226,7 +236,7 @@ export function useBackupVideo({
         throw new Error("No backup URL in API response");
       }
     } catch (error) {
-      devError("Error getting backup:", error);
+      devError("Error getting backup:", deviceProof ? "request error" : error);
       // Đặt trạng thái lỗi nhưng không hiển thị cho người dùng
       setBackupState((prev) => ({
         ...prev,

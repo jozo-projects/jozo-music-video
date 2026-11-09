@@ -3,10 +3,12 @@ import io from "socket.io-client";
 import { getDeviceId } from "@/utils/deviceId";
 import { devError, devLog } from "@/utils/devLog";
 import { SocketStatus, VideoTurnedOffData } from "../types";
+import { trustedEndpoint } from "../deviceApproval";
 
 type SocketInstance = ReturnType<typeof io>;
 interface SharedConnection {
   roomId: string;
+  deviceProof?: string;
   socket: SocketInstance;
   users: number;
   releaseTimer?: ReturnType<typeof setTimeout>;
@@ -14,19 +16,23 @@ interface SharedConnection {
 }
 let sharedConnection: SharedConnection | null = null;
 
-function createConnection(roomId: string): SharedConnection {
+function createConnection(roomId: string, deviceProof?: string): SharedConnection {
+  const socketUrl = import.meta.env.VITE_SOCKET_URL || (import.meta.env.DEV ? "http://localhost:8080" : "");
+  const trusted = !!deviceProof && !!trustedEndpoint(import.meta.env.VITE_SOCKET_URL);
+  if (deviceProof && !trusted) throw new Error("Socket URL must be explicitly configured and trusted");
   const socket = io(
-    import.meta.env.VITE_SOCKET_URL ||
-      (import.meta.env.DEV ? "http://localhost:8080" : ""),
+    socketUrl,
     {
       query: { roomId, deviceId: getDeviceId(), clientType: "video" },
+      ...(deviceProof && trusted ? { auth: { deviceProof } } : {}),
       reconnection: true,
       // Keep recovering from long outages; cap the delay, not the retry count.
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       timeout: 10000,
-      transports: ["websocket", "polling"],
+      // Browser WebSocket rejects redirects; polling could forward auth on a redirect.
+      transports: deviceProof ? ["websocket"] : ["websocket", "polling"],
       path: "/socket.io",
       forceNew: true,
     },
@@ -76,6 +82,7 @@ function createConnection(roomId: string): SharedConnection {
   window.addEventListener("online", handleOnline);
   const connection: SharedConnection = {
     roomId,
+    deviceProof,
     socket,
     users: 0,
     dispose: () => {
@@ -95,6 +102,7 @@ function createConnection(roomId: string): SharedConnection {
 
 interface UseSocketConnectionProps {
   roomId: string;
+  deviceProof?: string;
   onConnect: (socket: SocketInstance) => void;
   onVideosOff: () => void;
   onVideosOn: () => void;
@@ -107,6 +115,7 @@ interface UseSocketConnectionResult {
 
 export function useSocketConnection({
   roomId,
+  deviceProof,
   onConnect,
   onVideosOff,
   onVideosOn,
@@ -132,10 +141,10 @@ export function useSocketConnection({
       setSocketStatus({ connected: false, connectionAttempts: 0 });
       return;
     }
-    if (sharedConnection && sharedConnection.roomId !== roomId) {
+    if (sharedConnection && (sharedConnection.roomId !== roomId || sharedConnection.deviceProof !== deviceProof)) {
       sharedConnection.dispose();
     }
-    const connection = sharedConnection ?? createConnection(roomId);
+    const connection = sharedConnection ?? createConnection(roomId, deviceProof);
     sharedConnection = connection;
     clearTimeout(connection.releaseTimer);
     connection.users++;
@@ -190,6 +199,6 @@ export function useSocketConnection({
         connection.releaseTimer = setTimeout(connection.dispose, 0);
       }
     };
-  }, [roomId]);
+  }, [roomId, deviceProof]);
   return { socket, socketStatus, isVideoOff };
 }

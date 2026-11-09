@@ -1,6 +1,6 @@
 import React from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
-import VideoPlayer from "./components/video/VideoPlayer";
+import VideoPlayer from "./components/video/VideoApprovalEntry";
 
 const App: React.FC = () => {
   return (

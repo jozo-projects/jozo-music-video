@@ -108,6 +108,7 @@ export interface YouTubePlayerRef {
 export interface BackupVideoProps {
   videoId: string | undefined;
   roomId: string;
+  deviceProof?: string;
   volume: number;
   socket: typeof Socket | null;
   onVideoReady: () => void;

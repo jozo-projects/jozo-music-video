@@ -1,6 +1,7 @@
 import axios from "axios";
 import { NowPlayingData } from "./types";
 import { devError, devLog } from "@/utils/devLog";
+import { trustedHeaders } from "./deviceApproval";
 
 export interface RoomNowPlayingResult {
   nowPlaying: NowPlayingData;
@@ -93,11 +94,11 @@ function toNowPlaying(obj: Record<string, unknown>): NowPlayingData | null {
  * Trả về null nếu không có bài hoặc lỗi mạng (không xóa state hiện có).
  */
 export async function fetchRoomNowPlaying(
-  roomId: string
+  roomId: string, deviceProof?: string
 ): Promise<RoomNowPlayingResult | null> {
   const baseUrl =
     import.meta.env.VITE_API_BASE_URL ||
-    (import.meta.env.DEV ? "http://localhost:4000" : "");
+    (deviceProof ? window.location.origin : import.meta.env.DEV ? "http://localhost:4000" : "");
   if (!baseUrl || !roomId) {
     devError("Cannot fetch now-playing: missing API base URL or roomId", {
       hasBaseUrl: !!baseUrl,
@@ -111,7 +112,12 @@ export async function fetchRoomNowPlaying(
   devLog("GET now-playing:", url);
 
   try {
-    const response = await axios.get<unknown>(url, {
+    const headers = deviceProof ? trustedHeaders(url, deviceProof, import.meta.env.VITE_API_BASE_URL) : {};
+    if (deviceProof && !headers["X-Jozo-Device-Proof"]) throw new Error("Untrusted API URL");
+    const response = deviceProof ? await (async () => {
+      const res = await fetch(url, { headers, redirect: "error", signal: AbortSignal.timeout(15000) });
+      return { status: res.status, data: res.ok && res.status !== 204 ? await res.json() : null };
+    })() : await axios.get<unknown>(url, {
       timeout: 15000,
       validateStatus: (s) => s < 500,
     });
@@ -130,7 +136,7 @@ export async function fetchRoomNowPlaying(
 
     return { nowPlaying, shouldPlay };
   } catch (error) {
-    devError("GET now-playing failed:", error);
+    devError("GET now-playing failed", deviceProof ? "request error" : error);
     return null;
   }
 }

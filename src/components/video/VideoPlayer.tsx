@@ -62,7 +62,7 @@ interface YouTubeQualityEvent {
 // Memo component con để parent re-render không kéo re-render iframe.
 const MemoYouTubePlayerIframe = memo(YouTubePlayerIframe);
 
-const VideoPlayer = () => {
+const VideoPlayer = ({ deviceProof }: { deviceProof?: string } = {}) => {
   const playerRef = useRef<YouTubePlayerRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [params] = useSearchParams();
@@ -126,6 +126,12 @@ const VideoPlayer = () => {
   });
   const [showPoweredBy, setShowPoweredBy] = useState(true);
   const [showRoomModal, setShowRoomModal] = useState(false);
+  const [reconnectCooldown, setReconnectCooldown] = useState(false);
+  useEffect(() => {
+    if (!reconnectCooldown) return;
+    const timer = setTimeout(() => setReconnectCooldown(false), 5000);
+    return () => clearTimeout(timer);
+  }, [reconnectCooldown]);
   const [photoUrls, setPhotoUrls] = useState<string[]>([]);
   const [isPhotoShowing, setIsPhotoShowing] = useState(false);
   const [photoIndex, setPhotoIndex] = useState(0);
@@ -153,6 +159,7 @@ const VideoPlayer = () => {
 
   const { socket, socketStatus, isVideoOff } = useSocketConnection({
     roomId,
+    deviceProof,
     onConnect: (connectedSocket) => {
       connectedSocket.emit("check_now_playing", { roomId });
     },
@@ -276,6 +283,7 @@ const VideoPlayer = () => {
   } = useBackupVideo({
     videoId: queuedVideoId,
     roomId,
+    deviceProof,
     volume,
     socket,
     initialBackupUrl: catalogHlsUrl || hlsStreamUrl,
@@ -452,12 +460,12 @@ const VideoPlayer = () => {
     if (!roomId) return;
     let cancelled = false;
     const revision = authorityRevisionRef.current;
-    void fetchRoomNowPlaying(roomId).then((result) => {
+    void fetchRoomNowPlaying(roomId, deviceProof).then((result) => {
       if (cancelled || authorityRevisionRef.current !== revision || !result?.nowPlaying?.video_id) return;
       applyHydration(result.nowPlaying, result.shouldPlay);
     });
     return () => { cancelled = true; };
-  }, [roomId, applyHydration]);
+  }, [roomId, deviceProof, applyHydration]);
 
   const { handleVideoEnd } = useVideoEvents({
     socket,
@@ -1247,6 +1255,9 @@ const VideoPlayer = () => {
         currentRoomId={roomId}
         onSelect={handleSelectRoom}
         onClose={closeRoomModal}
+        onReconnect={roomId && !socketStatus.connected ? () => { setReconnectCooldown(true); socket?.connect(); } : undefined}
+        reconnectDisabled={!socket || reconnectCooldown}
+        reconnectMessage={reconnectCooldown ? "Đang thử kết nối…" : undefined}
       />
     </div>
   );
