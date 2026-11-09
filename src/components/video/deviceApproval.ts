@@ -34,7 +34,7 @@ export function trustedEndpoint(configured: string | undefined): URL | null {
     const privateIp = parts.length === 4 && parts.every(n => Number.isInteger(n) && n >= 0 && n <= 255) &&
       (parts[0] === 10 || parts[0] === 127 || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 169 && parts[1] === 254));
     const local = host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host === "[::1]" || privateIp;
-    if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) return null;
+    if (url.protocol !== "https:" && url.protocol !== "wss:" && !(url.protocol === "http:" && local)) return null;
     return url;
   } catch { /* invalid URL */ }
   return null;
