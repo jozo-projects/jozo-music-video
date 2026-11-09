@@ -12,7 +12,9 @@ import {
 } from "./deviceApproval";
 
 class RateLimited extends Error {
-  constructor(readonly seconds: number) { super("RATE_LIMITED"); }
+  constructor(readonly seconds: number) {
+    super("RATE_LIMITED");
+  }
 }
 
 type Status =
@@ -72,7 +74,11 @@ function ApprovalGate({ roomId }: { roomId: number }) {
         if (response.status === 429) {
           const body = await response.json().catch(() => ({}));
           const seconds = Number(body.retryAfterSeconds);
-          throw new RateLimited(Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 300) : 60);
+          throw new RateLimited(
+            Number.isFinite(seconds) && seconds > 0
+              ? Math.min(seconds, 300)
+              : 60,
+          );
         }
         if (!response.ok) throw new Error("Approval request failed");
         return await response.json();
@@ -95,7 +101,9 @@ function ApprovalGate({ roomId }: { roomId: number }) {
       running = true;
       dirty = false;
       try {
-        request = loadRequest(localStorage, roomId, () => makeProof(window.crypto));
+        request = loadRequest(localStorage, roomId, () =>
+          makeProof(window.crypto),
+        );
         if (request.terminal === "rejected") {
           setProof(undefined);
           setStatus("rejected");
@@ -107,12 +115,24 @@ function ApprovalGate({ roomId }: { roomId: number }) {
           save();
         }
         if (!request.id) {
-          const result = await post("requests", { roomId, clientType: "video", proof: request.proof });
+          const result = await post("requests", {
+            roomId,
+            clientType: "video",
+            proof: request.proof,
+          });
           if (cancelled) return;
-          if ((typeof result.id !== "string" && typeof result.id !== "number") || !result.id)
+          if (
+            (typeof result.id !== "string" && typeof result.id !== "number") ||
+            !result.id
+          )
             throw new Error("Invalid request response");
-          const stored = loadRequest(localStorage, roomId, () => makeProof(window.crypto));
-          if (stored.proof !== request.proof) { dirty = true; return; }
+          const stored = loadRequest(localStorage, roomId, () =>
+            makeProof(window.crypto),
+          );
+          if (stored.proof !== request.proof) {
+            dirty = true;
+            return;
+          }
           request.id = result.id;
           save();
         }
@@ -124,28 +144,55 @@ function ApprovalGate({ roomId }: { roomId: number }) {
           const endpoint = trustedEndpoint(import.meta.env.VITE_SOCKET_URL);
           if (endpoint) {
             socket = io(`${endpoint.origin}/device-authorization`, {
-              auth: { roomId, clientType: "video", id: request.id, proof: request.proof },
-              transports: ["websocket"], forceNew: true,
+              auth: {
+                roomId,
+                clientType: "video",
+                id: request.id,
+                proof: request.proof,
+              },
+              transports: ["websocket"],
+              forceNew: true,
             });
             socket.on("connect", trigger);
             socket.on("device_authorization_changed", trigger);
           }
         }
-        const result = await post("status", { roomId, clientType: "video", id: request.id, proof: request.proof });
+        const result = await post("status", {
+          roomId,
+          clientType: "video",
+          id: request.id,
+          proof: request.proof,
+        });
         if (cancelled || dirty) return;
         // Do not apply a response to a request replaced in another tab.
-        const stored = loadRequest(localStorage, roomId, () => makeProof(window.crypto));
-        if (stored.proof !== request.proof || stored.id !== request.id) { dirty = true; return; }
-        if (!["pending", "approved", "expired", "revoked", "rejected"].includes(result.status))
+        const stored = loadRequest(localStorage, roomId, () =>
+          makeProof(window.crypto),
+        );
+        if (stored.proof !== request.proof || stored.id !== request.id) {
+          dirty = true;
+          return;
+        }
+        if (
+          !["pending", "approved", "expired", "revoked", "rejected"].includes(
+            result.status,
+          )
+        )
           throw new Error("Invalid status");
-        if (result.status === "expired" || result.status === "revoked" || result.status === "rejected") {
+        if (
+          result.status === "expired" ||
+          result.status === "revoked" ||
+          result.status === "rejected"
+        ) {
           request.terminal = result.status;
           save();
           setProof(undefined);
           setStatus(result.status);
           if (result.status !== "rejected") dirty = true;
         } else {
-          if (request.terminal) { delete request.terminal; save(); }
+          if (request.terminal) {
+            delete request.terminal;
+            save();
+          }
           setProof(result.status === "approved" ? request.proof : undefined);
           setStatus(result.status);
         }
@@ -157,13 +204,22 @@ function ApprovalGate({ roomId }: { roomId: number }) {
           setRetryAt(blockedUntil.current);
         }
         if (!cancelled && !dirty) {
-          setStatus((previous) => previous === "approved" || previous === "rejected" ? previous : "error");
+          setStatus((previous) =>
+            previous === "approved" || previous === "rejected"
+              ? previous
+              : "error",
+          );
         }
       } finally {
         running = false;
         if (!cancelled) {
           if (dirty) void run();
-          else timer = setTimeout(trigger, Math.max(0, blockedUntil.current - Date.now()) || (request?.terminal === "rejected" ? 7000 : 30000));
+          else
+            timer = setTimeout(
+              trigger,
+              Math.max(0, blockedUntil.current - Date.now()) ||
+                (request?.terminal === "rejected" ? 7000 : 30000),
+            );
         }
       }
     };
@@ -183,7 +239,14 @@ function ApprovalGate({ roomId }: { roomId: number }) {
   const remaining = Math.max(0, Math.ceil((retryAt - now) / 1000));
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black p-6 text-center text-white">
-      <button type="button" onClick={() => setShowRoomModal(true)} className="absolute right-[15px] top-[15px] h-[50px] w-[140px]" aria-label="Chọn phòng Jozo"><img src={logo} alt="Jozo" className="h-full w-full" /></button>
+      <button
+        type="button"
+        onClick={() => setShowRoomModal(true)}
+        className="absolute right-[15px] top-[15px] h-[50px] w-[140px]"
+        aria-label="Chọn phòng Jozo"
+      >
+        <img src={logo} alt="Jozo" className="h-full w-full" />
+      </button>
       <div>
         <h1 className="text-xl font-bold">Phê duyệt thiết bị phòng {roomId}</h1>
         <p className="mt-4 text-white/70" role="status">
@@ -196,7 +259,9 @@ function ApprovalGate({ roomId }: { roomId: number }) {
                 : status === "rejected"
                   ? "Yêu cầu bị từ chối. Liên hệ nhân viên"
                   : status === "error"
-                    ? remaining > 0 && blockedUntil.current > now ? `Đang có nhiều yêu cầu. Thử lại sau ${remaining} giây…` : "Không thể kết nối. Đang thử lại…"
+                    ? remaining > 0 && blockedUntil.current > now
+                      ? `Đang có nhiều yêu cầu. Thử lại sau ${remaining} giây…`
+                      : "Không thể kết nối. Đang thử lại…"
                     : "Đang kiểm tra thiết bị…"}
         </p>
       </div>
@@ -205,10 +270,15 @@ function ApprovalGate({ roomId }: { roomId: number }) {
         currentRoomId={String(roomId)}
         onClose={() => setShowRoomModal(false)}
         onSelect={(selected) => {
-          if (selected === roomId) { setShowRoomModal(false); return; }
+          if (selected === roomId) {
+            setShowRoomModal(false);
+            return;
+          }
           const next = new URLSearchParams(params);
           next.set("roomId", String(selected));
-          window.location.assign(`${window.location.pathname}?${next.toString()}`);
+          window.location.assign(
+            `${window.location.pathname}?${next.toString()}`,
+          );
         }}
         onReconnect={() => {
           if (status === "rejected" || Date.now() < retryAt) return;
@@ -218,7 +288,15 @@ function ApprovalGate({ roomId }: { roomId: number }) {
           triggerRef.current?.();
         }}
         reconnectDisabled={status === "rejected" || remaining > 0}
-        reconnectMessage={status === "rejected" ? "Yêu cầu bị từ chối. Liên hệ nhân viên để cho phép gửi lại." : remaining > 0 ? `Vui lòng chờ ${remaining} giây.` : status === "pending" ? "Thiết bị đang chờ nhân viên duyệt." : undefined}
+        reconnectMessage={
+          status === "rejected"
+            ? "Yêu cầu bị từ chối. Liên hệ nhân viên để cho phép gửi lại."
+            : remaining > 0
+              ? `Vui lòng chờ ${remaining} giây.`
+              : status === "pending"
+                ? "Thiết bị đang chờ nhân viên duyệt."
+                : undefined
+        }
       />
     </div>
   );
@@ -227,12 +305,71 @@ function ApprovalGate({ roomId }: { roomId: number }) {
 export default function VideoApprovalEntry() {
   const [params] = useSearchParams();
   const room = params.get("roomId") || "";
-  if (
-    (import.meta.env.VITE_DEVICE_AUTHORIZATION ??
-      import.meta.env.VITE_DEVICE_APPROVAL_ENABLED) !== "true" ||
-    !room
-  )
-    return <VideoPlayer />;
+  if (!room) return <VideoPlayer />;
+  return <RoomVideoEntry room={room} />;
+}
+
+function RoomVideoEntry({ room }: { room: string }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let stopped = false;
+    let running = false;
+    let dirty = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let controller: AbortController | undefined;
+    const refresh = () => {
+      if (stopped) return;
+      clearTimeout(timer);
+      if (running) {
+        dirty = true;
+        return;
+      }
+      void poll();
+    };
+    const poll = async () => {
+      running = true;
+      dirty = false;
+      controller = new AbortController();
+      const timeout = setTimeout(() => controller?.abort(), 10000);
+      try {
+        const base = trustedEndpoint(import.meta.env.VITE_API_BASE_URL);
+        if (!base) throw new Error("Invalid approval API URL");
+        const response = await fetch(
+          `${base.href.replace(/\/$/, "")}/room-device-authorization/config`,
+          {
+            cache: "no-store",
+            redirect: "error",
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok) throw new Error("Authorization config unavailable");
+        const data = await response.json();
+        if (!data || typeof data.enabled !== "boolean")
+          throw new Error("Invalid authorization config");
+        if (!stopped && !dirty) setEnabled(data.enabled);
+      } catch {
+        if (!stopped) setEnabled(true);
+      } finally {
+        clearTimeout(timeout);
+        running = false;
+        if (!stopped) {
+          if (dirty) refresh();
+          else timer = setTimeout(refresh, 30000);
+        }
+      }
+    };
+    window.addEventListener("focus", refresh);
+    refresh();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      controller?.abort();
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+  if (enabled === null)
+    return <div role="status">Đang kiểm tra cấu hình thiết bị...</div>;
+  if (!enabled) return <VideoPlayer />;
   const roomId = Number(room);
   if (!Number.isSafeInteger(roomId) || roomId <= 0)
     return <div role="alert">Phòng không hợp lệ.</div>;
