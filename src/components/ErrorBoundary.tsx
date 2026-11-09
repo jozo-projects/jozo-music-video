@@ -15,14 +15,12 @@ interface ErrorBoundaryState {
  * postMessage throw, YouTube API lỗi bất thường…) và cho user tự retry
  * thay vì buộc phải F5 toàn trang.
  *
- * Auto reload sau 5s nếu user không click retry — app này chạy trên tv-box
- * không có user tương tác liên tục, cần tự hồi phục.
+ * Giữ màn hình lỗi để nhân viên có thể xem và chủ động thử lại.
  */
 class ErrorBoundary extends React.Component<
   ErrorBoundaryProps,
   ErrorBoundaryState
 > {
-  private autoReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(props: ErrorBoundaryProps) {
     super(props);
@@ -37,29 +35,9 @@ class ErrorBoundary extends React.Component<
     if (import.meta.env.DEV) {
       console.error("[ErrorBoundary] Render crash:", error, info);
     }
-    this.scheduleAutoReload();
-  }
-
-  componentWillUnmount() {
-    this.clearAutoReload();
-  }
-
-  private scheduleAutoReload() {
-    this.clearAutoReload();
-    this.autoReloadTimer = setTimeout(() => {
-      window.location.reload();
-    }, 5000);
-  }
-
-  private clearAutoReload() {
-    if (this.autoReloadTimer) {
-      clearTimeout(this.autoReloadTimer);
-      this.autoReloadTimer = null;
-    }
   }
 
   private handleRetry = () => {
-    this.clearAutoReload();
     this.setState((prev) => ({
       hasError: false,
       errorKey: prev.errorKey + 1,
@@ -77,7 +55,7 @@ class ErrorBoundary extends React.Component<
           />
           <p className="text-white text-xl mb-2">Có lỗi xảy ra</p>
           <p className="text-white/60 text-sm mb-6">
-            Đang tự động tải lại sau 5 giây...
+            Vui lòng thử lại hoặc liên hệ nhân viên.
           </p>
           <button
             type="button"
